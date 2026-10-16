@@ -1,28 +1,30 @@
 # Changelog
 
-## 1.0.0 — 2026-10-13
+## 1.0.0 — 2026-10-16
 
-Initial release.
+First public release.
 
 ### Added
 
-- Borderless fixed-size frosted-glass launcher window (`.ultraThinMaterial`, forced dark scheme, `.hiddenTitleBar` with drag-anywhere), centered single-column layout with tracked monospaced wordmark and reserved inline status slot.
-- Username field with `@AppStorage` persistence and classic `1–16 [A-Za-z0-9_]` validation; red inline errors for invalid input.
-- Version picker fed by a scanner over `~/Library/Application Support/minecraft/versions`: hidden-file filtering, `<id>/<id>.jar` and flat-jar layouts, manifest-release-date ordering with era-bucketed numeric-aware fallback (rd* < alpha < beta < 1.x < snapshots).
-- Mojang manifest integration: piston-meta v2 catalog (launchermeta fallback), per-version package parsing, remote section in the picker, install-on-launch for uninstalled versions.
-- Concurrent downloader: client jar, rule-filtered libraries with macOS natives classifiers (modern `downloads.artifact/classifiers` and 2013-era `name`+base-URL formats), asset index + objects with `virtual/` and `resources/` mirrors for legacy layouts; sha1-verified, atomic installs, retry with backoff, bounded concurrency (8 libraries / 12 assets), idempotent re-launches.
-- Offline identity generator reproducing Java's `UUID.nameUUIDFromBytes("OfflinePlayer:<name>")` byte-for-byte (MD5, version-3 + RFC 4122 variant bits, canonical hyphenation) — cross-verified against known canonical UUIDs.
-- Classpath compiler: version-resolved dependency paths first, then the recursive `libraries/` jar sweep, client jar last, colon-joined — safe for multi-version library folders.
-- Java auto-detection: `/usr/libexec/java_home`, Homebrew openjdk (Apple Silicon + Intel prefixes), `/Library/Java/JavaVirtualMachines`, `JAVA_HOME`; exact-major preference with version JSON `javaVersion` as authority and a per-era heuristic fallback; memory sized from physical RAM (floor 2 GB, cap 4 GB).
-- Natives extraction chain (`unzip` → `ditto` → JDK `jar`) into a per-version directory, refreshed every launch; `-Djava.library.path` wiring.
-- Launch pipeline on a background utility queue with full offline arguments (`--accessToken 0 --userType legacy`, asset index selection, legacy virtual assets, pre-1.7.2 `--assetIndex`/`--userProperties` adjustments, Log4Shell kill-switch).
-- Async stdout/stderr streaming through readability handlers with guaranteed final partial-line flush; a utility-queue reaper reports non-zero game exit codes into the status slot.
-- Hover-animated LAUNCH button (scale + opacity easing), in-progress spinner state, inline cancel.
-- 20-test suite (9 suites) covering UUID byte-exactness, scanning/ordering, Java parsing, maven layout, rule engine, classpath assembly, log streaming, and the concurrency gate.
-- CLT-friendly build scripts (SDK pinning, Swift Testing plugin paths) and a `.app` bundling script with ad-hoc signing.
+- Offline launcher core: local version scanning (hidden-file filtering, manifest-date ordering with era-bucketed numeric fallback), Mojang manifest fetching (piston-meta + launchermeta fallback), concurrent sha1-verified downloads (client jar, rule-filtered libraries with macOS natives classifiers, full asset sweeps with legacy virtual/resources mirrors), and full offline launch parameters (`--accessToken 0 --userType legacy`, the standard offline UUID byte-exact with Java's `nameUUIDFromBytes`).
+- macOS-critical JVM flags: `-XstartOnFirstThread` (SDL3/GFML backends die without it — "Unable to initialize SDL" → status 255), plus manifest-driven jvm arguments (`arguments.jvm` parsed with OS rules, `-cp` and `${templates}` excluded) so future version flags flow through automatically; year-style Java heuristics ("26.3" → Java 25); modern-flag safety net gated on the actual JVM.
+- Mod-loader launch support: `inheritsFrom` chain merging (child mainClass + libraries, ancestor client jar/assets/Java) — Fabric/NeoForge profiles and modpacks launch correctly; legacy 2013-format library descriptors and absolute-URL maven artifacts supported.
+- MoltenVK latency knob: the game process gets `MVK_CONFIG_PRESENT_MODE=0` (IMMEDIATE present) so the Vulkan backend never waits on a translation-layer vsync.
+- Folding utility panel with a **pixel dissolve**: on minimize the backdrop's individual pixels wink out one by one into an opaque dark base and the window then snaps over the emptied region (no sliding, no per-frame window resize — the dissolve is pure canvas work driven by a vsync-locked CVDisplayLink); on expand the window opens instantly and pixels materialize one by one.
+- Backdrops: frosted glass plus ten Minecraft-material textures — the real 16×16 block textures read live from the user's own `assets/objects` via the asset indexes (nearest-neighbor crisp, per-block quarter-turn variety), with procedural fallbacks (grass side, cobblestone grout, plank grain, netherrack veins, endstone, sandstone strata, deepslate, obsidian sheen).
+- Settings: heap slider (2–16 GB with Auto), Java runtime picker with on-disk candidate detection, backdrop picker, snapshot visibility toggle, custom game directory, one-tap `mods`/`shaderpacks` folder opening, terminal-focus mode that folds settings away and gives the log the whole panel.
+- Version management: on-disk footprint per version (own files), two-tap confirmed deletion, refusal while a game process is alive.
+- Dual-launch protection: second spawns blocked while the game runs; button inert; reaper reports non-zero exits to the status slot.
+- Built-in log terminal: ring-buffered (800 lines, amortized trims), stdout/stderr/system coloring, auto-scroll, clear.
+- Setup script (`Scripts/setup.sh`): Homebrew, Temurin/openjdk 25 + 17 + 8, Rosetta 2, and the app bundle in one pass.
+- App icon (procedural grass-block squircle), CLT-friendly build scripts (macOS 26.5 SDK pin, Swift Testing plugin paths), CI mirroring the house workflow.
+- 25-test suite / 9 suites: offline UUID byte-exactness (two known identities), version ordering and era buckets, scanner filtering, Java version parsing and per-era heuristics, legacy argument adjustments, heap sizing + override, username validation, maven layout, sha1 + integrity checks, manifest decoding, OS-rule library resolution, `arguments.jvm` extraction, `inheritsFrom` merging, classpath assembly, log-stream reassembly (final partial line included), concurrency gate bounds.
 
-### Fixed during development
+### Fixed
 
-- `LogStreamer` dropped the game's final log line when it had no trailing newline — `finish()` now always flushes the pending partial line (regression-tested).
-- The download concurrency gate is an actor; slots transfer directly from a releasing task to the next waiter, and the slot is released exactly once per exit path including cancellation.
-- Beta ids (`b1.7.3`) no longer sort above modern releases in the version picker.
+- Game exited with status 255 instantly: the JVM was never put on the first thread — fixed with `-XstartOnFirstThread`; the final manifest flag list is now honored verbatim.
+- Minimize collapse failure: the side panel's fixed frame imposed a 713 pt layout minimum the window could never fold below (SwiftUI's required AutoLayout constraints + a stale saved frame fighting manual sizes) — the panel now rides a non-sizing overlay, autosave is disabled, and the fold snaps at its boundaries.
+- Fold jank: the window was resized 48×/second through live material recomposition — the dissolve no longer resizes mid-animation at all (one boundary snap), and ticking is vsync-locked.
+- Dissolve flash: transparent window background showed the desktop through dying pixels — an opaque base layer now sits beneath every backdrop.
+- `LogStreamer` dropped the game's final log line when it had no trailing newline — `finish()` always flushes.
+- Beta versions sorted above modern releases in the picker — era buckets (`rd* < alpha < beta < 1.x < snapshots`).

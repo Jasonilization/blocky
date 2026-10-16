@@ -23,8 +23,8 @@ struct BlockyApp: App {
         }
         // Eliminates the default OS title bar while keeping traffic lights.
         .windowStyle(.hiddenTitleBar)
-        // The window's size is dictated by its content — a fixed utility panel.
-        .windowResizability(.contentSize)
+        // No resizability constraint: the fold (WindowConfigurator) owns the
+        // window's width; the user never sees a resize affordance anyway.
         .commands {
             // Strip the "File > New" item so only one launcher window exists.
             CommandGroup(replacing: CommandGroupPlacement.newItem) { }

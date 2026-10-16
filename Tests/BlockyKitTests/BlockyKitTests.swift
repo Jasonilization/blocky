@@ -144,6 +144,13 @@ struct JavaDetectionTests {
         #expect(LauncherEngine.heuristicJavaMajor(for: "b1.7.3") == 8)
     }
 
+    @Test func yearStyleVersionsMapToPreviousYearJVM() {
+        // 26.3 ships Java 25; 27.x will want 26; snapshot ids stay at 21.
+        #expect(LauncherEngine.heuristicJavaMajor(for: "26.3") == 25)
+        #expect(LauncherEngine.heuristicJavaMajor(for: "26.4-snapshot-3") == 25)
+        #expect(LauncherEngine.heuristicJavaMajor(for: "27.0") == 26)
+    }
+
     @Test func legacyArgumentAdjustments() {
         let modern = LauncherEngine.legacyArgumentAdjustments(for: "1.21.4")
         #expect(!modern.omitsAssetIndex && !modern.includesUserProperties)
@@ -269,6 +276,59 @@ struct ManifestResolutionTests {
         #expect(index.mapToResources == true)
         #expect(index.objects["minecraft/sounds/a.ogg"]?.hash == "deadbeef01")
     }
+
+    // MARK: Manifest jvm arguments (future-proofing channel)
+
+    @Test func extractsOSRelevantJVMFlagsFromManifest() throws {
+        let packageJSON = """
+        {
+          "id": "26.3", "type": "release",
+          "mainClass": "net.minecraft.client.main.Main",
+          "javaVersion": {"component": "java-runtime-gamma", "majorVersion": 25},
+          "downloads": {"client": {"sha1": "x", "size": 1, "url": "https://example.invalid/c.jar"}},
+          "arguments": {
+            "jvm": [
+              {"rules": [{"action": "allow", "os": {"name": "osx"}}], "value": ["-XstartOnFirstThread"]},
+              {"rules": [{"action": "allow", "os": {"name": "windows"}}], "value": "-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump"},
+              {"rules": [{"action": "allow", "os": {"arch": "x86"}}], "value": "-Xss1M"},
+              "-XX:StackShadowPages=32",
+              "--enable-native-access=ALL-UNNAMED",
+              "--add-exports",
+              "java.base/jdk.internal.misc=ALL-UNNAMED",
+              "-Djava.library.path=${natives_directory}/java",
+              "-Djna.tmpdir=${natives_directory}/jna",
+              "-Dminecraft.launcher.brand=${launcher_name}",
+              "-cp",
+              "${classpath}"
+            ],
+            "game": ["--username", "${auth_player_name}"]
+          }
+        }
+        """
+        let package = try MojangDownloader.decodeVersionPackage(Data(packageJSON.utf8))
+        let flags = MojangDownloader.jvmFlags(in: package)
+
+        #expect(flags.contains("-XstartOnFirstThread"))                 // osx rule
+        #expect(flags.contains("-XX:StackShadowPages=32"))              // bare string
+        #expect(flags.contains("--enable-native-access=ALL-UNNAMED"))
+        #expect(flags.contains("--add-exports"))
+        #expect(flags.contains("java.base/jdk.internal.misc=ALL-UNNAMED"))
+        #expect(flags.contains("-Xss1M"))                               // arch rule → allowed
+        #expect(!flags.contains("-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump"))  // windows rule
+        #expect(!flags.contains("-cp"))                                 // Blocky owns the classpath
+        #expect(!flags.contains("${classpath}"))
+        #expect(!flags.contains { $0.contains("${") })                  // every template dropped
+        #expect(flags.filter { $0 == "-XstartOnFirstThread" }.count == 1)
+    }
+
+    @Test func emptyManifestYieldsNoFlags() throws {
+        // 1.12-era manifests predate `arguments` — nothing to merge.
+        let package = try MojangDownloader.decodeVersionPackage(Data("""
+        {"id": "1.12.2", "mainClass": "net.minecraft.client.main.Main",
+         "downloads": {"client": {"sha1": "x", "size": 1, "url": "https://example.invalid/c.jar"}}}
+        """.utf8))
+        #expect(MojangDownloader.jvmFlags(in: package).isEmpty)
+    }
 }
 
 // MARK: - Classpath compilation
@@ -294,7 +354,7 @@ struct ClasspathTests {
         try fm.createDirectory(at: clientJar.deletingLastPathComponent(), withIntermediateDirectories: true)
         fm.createFile(atPath: clientJar.path, contents: Data([0]))
 
-        let classpath = try engine.buildClasspath(versionID: "1.20.1", package: nil)
+        let classpath = try engine.buildClasspath(clientJar: clientJar, package: nil)
         let entries = classpath.components(separatedBy: ":")
 
         #expect(entries.count == 4)
@@ -302,6 +362,56 @@ struct ClasspathTests {
         #expect(entries.last?.hasSuffix("1.20.1.jar") == true)
         #expect(entries.contains { $0.hasSuffix("c-3.0.jar") })
         #expect(!classpath.contains("ignored.txt") && !classpath.contains("h.jar"))
+    }
+
+    @Test func heapOverrideWinsOverAutoSizing() {
+        #expect(LauncherEngine.heapMegabytes(manualOverrideGB: 6) == 6144)
+        // 0 = auto: falls back to the RAM-sized default (machine-dependent,
+        // but always within the sane band).
+        let auto = LauncherEngine.heapMegabytes(manualOverrideGB: 0)
+        #expect(auto >= 1024 && auto <= 4096)
+    }
+
+    @Test func inheritsFromMergeKeepsChildMainClassAndParentClient() throws {
+        // Fabric-style profile: no client download, its own mainClass and
+        // loader libraries, inheriting vanilla's client/assets/java.
+        let childJSON = """
+        {
+          "id": "fabric-loader-26.3-0.16.14", "type": "release",
+          "inheritsFrom": "26.3",
+          "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+          "libraries": [
+            {"name": "net.fabricmc:fabric-loader:0.16.14",
+             "downloads": {"artifact": {"path": "net/fabricmc/fabric-loader/0.16.14/fabric-loader-0.16.14.jar", "sha1": "a", "size": 4, "url": "https://maven.fabricmc.test/fabric-loader-0.16.14.jar"}}}
+          ]
+        }
+        """
+        let parentJSON = """
+        {
+          "id": "26.3", "type": "release",
+          "mainClass": "net.minecraft.client.main.Main",
+          "assets": "26.3",
+          "assetIndex": {"id": "34", "sha1": "x", "size": 1, "totalSize": 2, "url": "https://example.invalid/34.json"},
+          "javaVersion": {"component": "java-runtime-gamma", "majorVersion": 25},
+          "downloads": {"client": {"sha1": "c", "size": 9, "url": "https://example.invalid/client.jar"}},
+          "libraries": [
+            {"name": "com.mojang:brigadier:1.0.18",
+             "downloads": {"artifact": {"path": "com/mojang/brigadier/1.0.18/brigadier-1.0.18.jar", "sha1": "b", "size": 3, "url": "https://example.invalid/brigadier.jar"}}}
+          ]
+        }
+        """
+        let child = try MojangDownloader.decodeVersionPackage(Data(childJSON.utf8))
+        let parent = try MojangDownloader.decodeVersionPackage(Data(parentJSON.utf8))
+        let merged = LauncherEngine.merged(child: child, parent: parent)
+
+        #expect(merged.inheritsFrom == nil)
+        #expect(merged.mainClass == "net.fabricmc.loader.impl.launch.knot.KnotClient")
+        #expect(merged.downloads?.client?.url == "https://example.invalid/client.jar")
+        #expect(merged.assetIndex?.id == "34")
+        #expect(merged.javaVersion?.majorVersion == 25)
+        #expect(merged.libraries?.count == 2)
+        #expect(merged.libraries?[0].name?.hasPrefix("net.fabricmc") == true)     // child's loader first
+        #expect(merged.libraries?[1].name?.hasPrefix("com.mojang") == true)      // parent's vanilla libs second
     }
 }
 

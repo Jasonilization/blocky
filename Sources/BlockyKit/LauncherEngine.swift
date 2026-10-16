@@ -188,6 +188,22 @@ final class LogStreamer {
     }
 }
 
+// MARK: - Log terminal model
+
+/// One line in the launcher's built-in terminal.
+public struct LogLine: Identifiable {
+    public let id: Int
+    public let text: String
+    public let kind: Kind
+
+    public enum Kind {
+        case info      // launcher phase messages
+        case out       // game stdout
+        case err       // game stderr
+        case system    // command summaries, exit statuses
+    }
+}
+
 // MARK: - Engine
 
 public final class LauncherEngine: ObservableObject {
@@ -200,6 +216,11 @@ public final class LauncherEngine: ObservableObject {
     @Published public private(set) var statusMessage: String?
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var gameRunning = false
+    @Published public private(set) var logLines: [LogLine] = []
+    @Published public private(set) var javaCandidates: [JavaCandidate] = []
+    /// On-disk size (bytes) of each installed version's own files —
+    /// `versions/<id>/` only; shared libraries and assets are not included.
+    @Published public private(set) var versionFootprints: [String: Int64] = [:]
 
     /// The picker binding. Persisted across launches via UserDefaults.
     @Published public var selectedVersionID: String = "" {
@@ -210,9 +231,14 @@ public final class LauncherEngine: ObservableObject {
         }
     }
 
-    /// Remote catalog entries that are not installed yet.
+    /// Remote catalog entries that are not installed yet. Snapshot display
+    /// is user-tunable via the "blocky.showSnapshots" setting.
     public var fetchableVersions: [RemoteVersion] {
-        remoteVersions.filter { !installedVersions.contains($0.id) }
+        let showSnapshots = (UserDefaults.standard.object(forKey: "blocky.showSnapshots") as? Bool) ?? true
+        return remoteVersions.filter { version in
+            guard !installedVersions.contains(version.id) else { return false }
+            return showSnapshots || version.isRelease
+        }
     }
 
     public var isSelectedVersionInstalled: Bool {
@@ -224,11 +250,13 @@ public final class LauncherEngine: ObservableObject {
     private static let selectedVersionKey = "blocky.selectedVersion"
     private static let remoteCatalogDisplayLimit = 40
 
-    let minecraftRoot: URL
+    public let minecraftRoot: URL
 
     var versionsDirectory: URL { minecraftRoot.appendingPathComponent("versions", isDirectory: true) }
     var librariesDirectory: URL { minecraftRoot.appendingPathComponent("libraries", isDirectory: true) }
-    var assetsDirectory: URL { minecraftRoot.appendingPathComponent("assets", isDirectory: true) }
+    public var assetsDirectory: URL { minecraftRoot.appendingPathComponent("assets", isDirectory: true) }
+    public var modsDirectory: URL { minecraftRoot.appendingPathComponent("mods", isDirectory: true) }
+    public var shaderpacksDirectory: URL { minecraftRoot.appendingPathComponent("shaderpacks", isDirectory: true) }
 
     public static func defaultMinecraftDirectory() -> URL {
         // Power users may point Blocky at a non-default game directory:
@@ -267,9 +295,48 @@ public final class LauncherEngine: ObservableObject {
         }
     }
 
+    // MARK: Log terminal plumbing
+
+    private static let logLineLimit = 800
+    private var logCounter = 0
+
+    /// Appends one line to the built-in terminal. Main thread only.
+    private func appendLog(_ text: String, kind: LogLine.Kind) {
+        logCounter += 1
+        logLines.append(LogLine(id: logCounter, text: text, kind: kind))
+
+        // Batched trim keeps heavy game-log bursts amortized O(1).
+        if logLines.count > Self.logLineLimit + 50 {
+            logLines.removeFirst(logLines.count - Self.logLineLimit)
+        }
+    }
+
+    /// Thread-safe entry point for the game's streamers (utility queues).
+    private func enqueueLog(_ text: String, kind: LogLine.Kind) {
+        DispatchQueue.main.async {
+            self.appendLog(text, kind: kind)
+        }
+    }
+
+    public func clearLog() {
+        logLines = []
+    }
+
+    /// Snapshot of every discoverable JVM, published for the settings menu.
+    /// Probing shells out to `java -version`, so it runs off the main thread.
+    public func refreshJavaCandidates() {
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let candidates = LauncherEngine.detectJavaInstallations()
+            await MainActor.run {
+                self?.javaCandidates = candidates
+            }
+        }
+    }
+
     // MARK: Bootstrap & discovery
 
     public func bootstrap() {
+        refreshJavaCandidates()
         Task { [weak self] in
             guard let self else { return }
             await self.reloadInstalledVersions()
@@ -284,10 +351,76 @@ public final class LauncherEngine: ObservableObject {
             to: scanned,
             releaseDates: releaseDateIndexSnapshot()
         )
+        // Version footprints (own files only) — computed off-main next to the scan.
+        let footprints = Self.measureFootprints(for: ordered, in: versionsDirectory)
         await MainActor.run {
             installedVersions = ordered
+            versionFootprints = footprints
             reconcileSelectionOnMain()
         }
+    }
+
+    /// Recursively sizes each version's own files (jar, json, natives).
+    static func measureFootprints(for versionIDs: [String], in versionsDirectory: URL) -> [String: Int64] {
+        let fileManager = FileManager.default
+        var results: [String: Int64] = [:]
+
+        for versionID in versionIDs {
+            var total: Int64 = 0
+            let directory = versionsDirectory.appendingPathComponent(versionID, isDirectory: true)
+            if let enumerator = fileManager.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for case let url as URL in enumerator {
+                    let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                    if values?.isRegularFile == true {
+                        total += Int64(values?.fileSize ?? 0)
+                    }
+                }
+            }
+            let flatJar = versionsDirectory.appendingPathComponent("\(versionID).jar")
+            if let size = try? flatJar.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+                total += Int64(size)
+            }
+            results[versionID] = total
+        }
+
+        return results
+    }
+
+    /// Removes an installed version's own files. Refuses to run while a game
+    /// process is alive; reports through the status slot either way.
+    @discardableResult
+    public func deleteVersion(_ versionID: String) -> Bool {
+        guard !gameRunning else {
+            errorMessage = "Quit Minecraft before deleting versions."
+            return false
+        }
+
+        let directory = versionsDirectory.appendingPathComponent(versionID, isDirectory: true)
+        let flatJar = versionsDirectory.appendingPathComponent("\(versionID).jar")
+        let fileManager = FileManager.default
+
+        do {
+            if fileManager.fileExists(atPath: directory.path) {
+                try fileManager.removeItem(at: directory)
+            } else if fileManager.fileExists(atPath: flatJar.path) {
+                try fileManager.removeItem(at: flatJar)
+            } else {
+                return false
+            }
+        } catch {
+            errorMessage = "Couldn't delete \(versionID) — \(error.localizedDescription)"
+            return false
+        }
+
+        statusMessage = "Deleted \(versionID)"
+        Task { [weak self] in
+            await self?.reloadInstalledVersions()
+        }
+        return true
     }
 
     func reloadRemoteCatalog() async {
@@ -514,8 +647,10 @@ public final class LauncherEngine: ObservableObject {
     /// Assembles the complete `-cp` argument: the version's exact resolved
     /// dependencies first (so duplicate artifacts of other versions never
     /// shadow them), then the recursive sweep of every jar in libraries/,
-    /// and finally the main game client jar.
-    func buildClasspath(versionID: String, package: VersionPackage?) throws -> String {
+    /// and finally the main game client jar. With an `inheritsFrom` chain
+    /// (mod loaders), both the child's and the base version's libraries are
+    /// already merged into `package`.
+    func buildClasspath(clientJar: URL, package: VersionPackage?) throws -> String {
         let fileManager = FileManager.default
         var ordered: [String] = []
         var seen = Set<String>()
@@ -536,9 +671,8 @@ public final class LauncherEngine: ObservableObject {
             append(jarPath)
         }
 
-        let clientJar = clientJarURL(for: versionID)
         guard fileManager.fileExists(atPath: clientJar.path) else {
-            throw LaunchError.clientJarMissing(versionID)
+            throw LaunchError.clientJarMissing(clientJar.lastPathComponent)
         }
         append(clientJar.path)
 
@@ -577,9 +711,21 @@ public final class LauncherEngine: ObservableObject {
 
     // MARK: Java detection
 
-    struct JavaCandidate: Hashable {
-        let binary: URL
-        let major: Int
+    public struct JavaCandidate: Hashable {
+        public let binary: URL
+        public let major: Int
+
+        /// Short human label: "Temurin 25" from a JDK bundle path.
+        public var displayName: String {
+            let parent = binary.deletingLastPathComponent()          // …/bin
+            let home = parent.deletingLastPathComponent()           // …/Contents/Home or …/openjdk
+            let raw = home.deletingLastPathComponent().lastPathComponent
+            let styled = raw
+                .replacingOccurrences(of: ".jdk", with: "")
+                .replacingOccurrences(of: "openjdk", with: "OpenJDK")
+            let name = styled.isEmpty ? home.lastPathComponent : styled
+            return "\(name) \(major)"
+        }
     }
 
     /// Probes the standard macOS installation sites, in priority order.
@@ -696,9 +842,16 @@ public final class LauncherEngine: ObservableObject {
             return 8   // ancient betas and alphas
         }
 
-        let numbers = versionID
-            .split(separator: ".")
-            .map { Int($0.prefix(while: { $0.isASCII && $0.isNumber })) ?? 0 }
+        let segments = versionID.split(separator: ".")
+        let numbers = segments.map { Int($0.prefix(while: { $0.isASCII && $0.isNumber })) ?? 0 }
+
+        // Year-style release ids ("26.3", "27.0") pair with the previous
+        // year's LTS line — 26.3 ships Java 25, 25.1 shipped 21. Snapshot
+        // ids ("24w13a") have no dot and stay at the modern baseline.
+        if numbers.count >= 2, numbers[0] != 1,
+           (24...40).contains(numbers[0]) {
+            return max(21, numbers[0] - 1)
+        }
 
         guard numbers.count >= 2, numbers[0] == 1 else {
             return 21  // modern snapshot ids such as "24w13a"
@@ -716,7 +869,7 @@ public final class LauncherEngine: ObservableObject {
         }
     }
 
-    static func recommendedHeapMegabytes(for physicalMemory: UInt64) -> Int {
+    public static func recommendedHeapMegabytes(for physicalMemory: UInt64) -> Int {
         let megabyte: UInt64 = 1024 * 1024
         let installedMegabytes = physicalMemory / megabyte
 
@@ -764,6 +917,14 @@ public final class LauncherEngine: ObservableObject {
         let username = rawUsername.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isWorking else { return }
 
+        // Dual-launch protection: exactly one game process at a time.
+        guard !gameRunning else {
+            errorMessage = nil
+            statusMessage = "Minecraft is already running — quit it first."
+            appendLog("✕ blocked duplicate launch — a game process is alive", kind: .system)
+            return
+        }
+
         guard !username.isEmpty else {
             errorMessage = "Enter a username first."
             return
@@ -798,22 +959,19 @@ public final class LauncherEngine: ObservableObject {
         do {
             try Task.checkCancellation()
 
-            // ── Phase 1: resolve the version definition (local JSON, else manifest)
-            let (package, remoteJSON) = try await resolvePackage(versionID: versionID)
+            // ── Phase 1: resolve the version definition (local JSON, else
+            // manifest), folding `inheritsFrom` chains for mod loaders.
+            let resolved = try await resolvePackage(versionID: versionID)
             progress("Preparing launch files…")
 
-            // Persist the manifest early so interrupted installs can resume.
-            if let remoteJSON {
-                try writePackageJSON(remoteJSON, versionID: versionID)
-            }
-
-            // ── Phase 2: the client jar (downloaded when the version is remote)
-            let clientJar = clientJarURL(for: versionID)
+            // ── Phase 2: the client jar — from the ancestor that ships one
+            // (fabric-loader profiles inherit vanilla's client jar).
+            let clientJar = clientJarURL(for: resolved?.clientVersionID ?? versionID)
             if !FileManager.default.fileExists(atPath: clientJar.path) {
-                guard let package else { throw LaunchError.versionUnavailable(versionID) }
+                guard let resolved else { throw LaunchError.versionUnavailable(versionID) }
                 try await downloader.installClientJar(
-                    package: package,
-                    versionID: versionID,
+                    package: resolved.package,
+                    versionID: resolved.clientVersionID,
                     versionsDirectory: versionsDirectory
                 ) { [weak self] label in
                     self?.progress(label)
@@ -823,7 +981,7 @@ public final class LauncherEngine: ObservableObject {
             try Task.checkCancellation()
 
             // ── Phase 3: dependencies + assets (idempotent, sha1-gated)
-            if let package {
+            if let package = resolved?.package {
                 try await downloader.ensureLibraries(
                     package: package,
                     librariesDirectory: librariesDirectory
@@ -842,17 +1000,26 @@ public final class LauncherEngine: ObservableObject {
 
             // ── Phase 4: classpath
             progress("Compiling classpath…")
-            let classpath = try buildClasspath(versionID: versionID, package: package)
+            let classpath = try buildClasspath(clientJar: clientJar, package: resolved?.package)
             print("[Blocky] Classpath entries: \(classpath.components(separatedBy: ":").count)")
 
             // ── Phase 5: Java runtime
-            let requiredMajor = package?.javaVersion?.majorVersion
+            let requiredMajor = resolved?.package.javaVersion?.majorVersion
                 ?? Self.heuristicJavaMajor(for: versionID)
             let java = try resolveJava(requiredMajor: requiredMajor)
 
+            #if arch(arm64)
+            // Old natives are x86_64-only; on Apple Silicon they load only
+            // through Rosetta 2 + an Intel JVM. Surface that before it
+            // surfaces as an UnsatisfiedLinkError.
+            if requiredMajor <= 8, resolved?.package.libraries?.isEmpty == false {
+                progress("Heads up — pre-1.17 natives are x86_64; if this crashes, install Rosetta 2 and an Intel JDK (brew under /usr/local).")
+            }
+            #endif
+
             // ── Phase 6: native libraries
             let natives = extractNatives(
-                package: package,
+                package: resolved?.package,
                 versionID: versionID,
                 javaHome: Self.inferredJavaHome(for: java.binary)
             )
@@ -864,7 +1031,7 @@ public final class LauncherEngine: ObservableObject {
                 java: java,
                 classpath: classpath,
                 nativesDirectory: natives,
-                package: package
+                package: resolved?.package
             )
 
             complete(status: "Minecraft is running — logs stream to this console.")
@@ -879,19 +1046,83 @@ public final class LauncherEngine: ObservableObject {
         }
     }
 
-    private func resolvePackage(versionID: String) async throws -> (package: VersionPackage?, remoteJSON: Data?) {
-        // The local JSON is authoritative for anything already on disk.
-        if let data = try? Data(contentsOf: versionPackageURL(for: versionID)) {
-            if let package = try? MojangDownloader.decodeVersionPackage(data) {
-                return (package, nil)
-            }
+    /// The result of resolving a version definition, including `inheritsFrom`
+    /// chains. `clientVersionID` is the ancestor that actually ships the
+    /// game client jar (Fabric/Forge profiles inherit it from vanilla).
+    private struct ResolvedVersion {
+        let package: VersionPackage
+        let clientVersionID: String
+    }
+
+    /// Resolves a version definition: local JSON first, else the manifest.
+    /// Walks `inheritsFrom` chains the way mod loaders (Fabric, Forge,
+    /// NeoForge) and the official launcher expect — the child keeps its own
+    /// mainClass and libraries, ancestors fill in the client jar, assets,
+    /// and Java requirements.
+    private func resolvePackage(versionID: String) async throws -> ResolvedVersion? {
+        var chain: [VersionPackage] = []
+        var visited: Set<String> = []
+
+        var nextID: String? = versionID
+        while let currentID = nextID, visited.insert(currentID).inserted, visited.count <= 4 {
+            guard let loaded = try await loadRawPackage(versionID: currentID) else { break }
+            chain.append(loaded)
+            nextID = loaded.inheritsFrom
         }
-        // Otherwise fall back to the manifest catalog.
+
+        guard let child = chain.first else { return nil }
+
+        var merged = child
+        for parent in chain.dropFirst() {
+            merged = Self.merged(child: merged, parent: parent)
+        }
+
+        // The nearest ancestor that ships the client jar provides it — a
+        // fabric-loader profile has no client download of its own.
+        let clientVersionID = chain.first { $0.downloads?.client != nil }?.id ?? versionID
+
+        return ResolvedVersion(package: merged, clientVersionID: clientVersionID)
+    }
+
+    /// Loads one link of the chain, persisting manifest fetches immediately so
+    /// interrupted installs resume on the next launch.
+    private func loadRawPackage(versionID: String) async throws -> VersionPackage? {
+        if let data = try? Data(contentsOf: versionPackageURL(for: versionID)),
+           let package = try? MojangDownloader.decodeVersionPackage(data) {
+            return package
+        }
         if let remote = remoteIndexSnapshot()[versionID] {
             let fetched = try await downloader.fetchVersionPackage(remote)
-            return (fetched.package, fetched.data)
+            try writePackageJSON(fetched.data, versionID: versionID)
+            return fetched.package
         }
-        return (nil, nil)
+        return nil
+    }
+
+    /// Child-first merge for inheritsFrom chains.
+    static func merged(child: VersionPackage, parent: VersionPackage) -> VersionPackage {
+        let arguments: VersionPackage.LaunchArguments?
+        if let childArguments = child.arguments {
+            arguments = VersionPackage.LaunchArguments(
+                jvm: childArguments.jvm ?? parent.arguments?.jvm,
+                game: childArguments.game ?? parent.arguments?.game
+            )
+        } else {
+            arguments = parent.arguments
+        }
+
+        return VersionPackage(
+            id: child.id ?? parent.id,
+            type: child.type ?? parent.type,
+            mainClass: child.mainClass ?? parent.mainClass,
+            assets: child.assets ?? parent.assets,
+            assetIndex: child.assetIndex ?? parent.assetIndex,
+            libraries: (child.libraries ?? []) + (parent.libraries ?? []),
+            javaVersion: child.javaVersion ?? parent.javaVersion,
+            downloads: child.downloads ?? parent.downloads,
+            arguments: arguments,
+            inheritsFrom: nil
+        )
     }
 
     private func writePackageJSON(_ data: Data, versionID: String) throws {
@@ -901,12 +1132,36 @@ public final class LauncherEngine: ObservableObject {
     }
 
     private func resolveJava(requiredMajor: Int) throws -> JavaCandidate {
+        // A manual override from Settings always wins when it is usable.
+        if let override = manualJavaOverride() {
+            print("[Blocky] Java override: \(override.binary.path) (major \(override.major))")
+            return override
+        }
+
         let candidate = try Self.bestJavaCandidate(requiredMajor: requiredMajor)
         if candidate.major < requiredMajor {
             progress("Java \(candidate.major) found — this version prefers Java \(requiredMajor); launch may fail.")
         }
         print("[Blocky] Java runtime: \(candidate.binary.path) (major \(candidate.major))")
         return candidate
+    }
+
+    /// User-pinned runtime from Settings ("blocky.javaOverridePath").
+    private func manualJavaOverride() -> JavaCandidate? {
+        guard let path = UserDefaults.standard.string(forKey: "blocky.javaOverridePath"),
+              !path.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        guard FileManager.default.isExecutableFile(atPath: url.path),
+              let major = Self.probeJavaMajor(at: url) else { return nil }
+        return JavaCandidate(binary: url, major: major)
+    }
+
+    /// Heap for the game: user override (Settings) or RAM-sized auto default.
+    static func heapMegabytes(manualOverrideGB: Int) -> Int {
+        guard manualOverrideGB > 0 else {
+            return recommendedHeapMegabytes(for: ProcessInfo.processInfo.physicalMemory)
+        }
+        return manualOverrideGB * 1024
     }
 
     // MARK: Natives
@@ -997,15 +1252,48 @@ public final class LauncherEngine: ObservableObject {
             }
         }
 
-        let heapMegabytes = Self.recommendedHeapMegabytes(for: ProcessInfo.processInfo.physicalMemory)
+        let heapMegabytes = Self.heapMegabytes(
+            manualOverrideGB: UserDefaults.standard.integer(forKey: "blocky.ramOverrideGB")
+        )
+
+        // Future-proofing: every OS-relevant JVM flag the version manifest
+        // declares rides along automatically (26.x sends
+        // `-XstartOnFirstThread`, `--enable-native-access`, `--add-exports`,
+        // `-XX:StackShadowPages=32` this way — whatever 27.x+ needs next).
+        let manifestFlags = package.map { MojangDownloader.jvmFlags(in: $0) } ?? []
 
         var arguments: [String] = [
+            // THE macOS flag: SDL (26.x) and GLFW (≤25.x) both require their
+            // Cocoa backend to run on thread 0. Without this the JVM parks
+            // itself on a pthread and the game dies with "Unable to
+            // initialize SDL: No available video device" → System.exit(-1)
+            // → shell status 255. Every official launcher on macOS sends it.
+            "-XstartOnFirstThread",
             "-Xms512M",
             "-Xmx\(heapMegabytes)M",
             "-XX:+UseG1GC",
             "-XX:-UseAdaptiveSizePolicy",
             "-Dlog4j2.formatMsgNoLookups=true",   // Log4Shell hard-stop (1.7–1.18)
+            "-Xdock:name=Minecraft",              // keep the Dock honest
+            "-Dminecraft.launcher.brand=blocky",
+            "-Dminecraft.launcher.version=1.0.0",
         ]
+
+        for flag in manifestFlags where !arguments.contains(flag) {
+            arguments.append(flag)
+        }
+
+        // Fallback for modern-era installs with no manifest at all — same
+        // flags the 26.x manifests declare. Java 8 rejects unrecognized `--`
+        // options outright, so gate on the JVM we actually picked.
+        if manifestFlags.isEmpty && java.major >= 16 {
+            arguments.append(contentsOf: [
+                "--enable-native-access=ALL-UNNAMED",   // LWJGL/JNA/SDL do raw FFI
+                "--add-exports", "java.base/jdk.internal.misc=ALL-UNNAMED",
+                "-XX:StackShadowPages=32",              // guard pages for native GL callbacks
+            ])
+        }
+
         if let nativesDirectory {
             arguments.append("-Djava.library.path=\(nativesDirectory.path)")
         }
@@ -1031,12 +1319,23 @@ public final class LauncherEngine: ObservableObject {
         }
 
         print("[Blocky] ▸ \(java.binary.path) \(arguments.joined(separator: " "))")
+        appendLog(
+            "▸ java \(java.major) · heap \(heapMegabytes) MB · classpath \(classpath.components(separatedBy: ":").count) jars · main \(mainClass)",
+            kind: .system
+        )
 
         let process = Process()
         process.executableURL = java.binary
         process.arguments = arguments
         process.currentDirectoryURL = minecraftRoot
         process.qualityOfService = .userInitiated
+
+        // Latency knob: MoltenVK's IMMEDIATE present mode — no vsync at the
+        // Vulkan translation layer. The game's own VSync-off should request
+        // it, but this makes it certain (raw value 0 = IMMEDIATE).
+        var environment = ProcessInfo.processInfo.environment
+        environment["MVK_CONFIG_PRESENT_MODE"] = "0"
+        process.environment = environment
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -1046,11 +1345,13 @@ public final class LauncherEngine: ObservableObject {
         // Scheduled on a background utility queue — the UI never blocks.
         try processQueue.sync { try process.run() }
 
-        let stdoutStreamer = LogStreamer(label: "stdout") { line in
+        let stdoutStreamer = LogStreamer(label: "stdout") { [weak self] line in
             print("[minecraft] \(line)")
+            self?.enqueueLog(line, kind: .out)
         }
-        let stderrStreamer = LogStreamer(label: "stderr") { line in
+        let stderrStreamer = LogStreamer(label: "stderr") { [weak self] line in
             print("[minecraft:err] \(line)")
+            self?.enqueueLog(line, kind: .err)
         }
         stdoutStreamer.attach(to: stdoutPipe)
         stderrStreamer.attach(to: stderrPipe)
@@ -1074,10 +1375,12 @@ public final class LauncherEngine: ObservableObject {
                 self.gameRunning = false
 
                 if status != 0 {
-                    self.errorMessage = "Minecraft exited with status \(status) — see the console output."
+                    self.errorMessage = "Minecraft exited with status \(status) — see the terminal."
                     self.statusMessage = nil
+                    self.appendLog("✕ game exited with status \(status)", kind: .system)
                 } else if self.errorMessage == nil {
                     self.statusMessage = "Minecraft quit normally."
+                    self.appendLog("✓ game quit normally", kind: .system)
                 }
             }
         }
@@ -1136,6 +1439,7 @@ public final class LauncherEngine: ObservableObject {
     private func progress(_ text: String) {
         DispatchQueue.main.async {
             self.statusMessage = text
+            self.appendLog(text, kind: .info)
         }
     }
 
@@ -1143,6 +1447,7 @@ public final class LauncherEngine: ObservableObject {
         DispatchQueue.main.async {
             self.isWorking = false
             self.statusMessage = status
+            if let status { self.appendLog(status, kind: .info) }
         }
     }
 
@@ -1151,6 +1456,7 @@ public final class LauncherEngine: ObservableObject {
             self.isWorking = false
             self.statusMessage = nil
             self.errorMessage = message
+            self.appendLog("✕ \(message)", kind: .err)
         }
     }
 }

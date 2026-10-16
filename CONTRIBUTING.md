@@ -17,7 +17,7 @@ Testing plugin paths); with full Xcode installed they stay out of the way.
 
 ## Before you submit
 
-- `./Scripts/swift-test.sh` passes (20 tests / 9 suites).
+- `./Scripts/swift-test.sh` passes (25 tests / 9 suites).
 - New behavior comes with tests where practical — the launch pipeline in
   `BlockyKit` is the part worth locking down.
 - No new warnings if avoidable.

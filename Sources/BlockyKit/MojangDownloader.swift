@@ -58,6 +58,8 @@ struct VersionPackage: Decodable {
     let libraries: [LibraryReference]?
     let javaVersion: JavaVersionReference?
     let downloads: ClientDownloads?
+    let arguments: LaunchArguments?
+    let inheritsFrom: String?   // mod loaders chain into a base version
 
     struct AssetIndexReference: Decodable {
         let id: String
@@ -102,6 +104,54 @@ struct VersionPackage: Decodable {
             struct OperatingSystem: Decodable {
                 let name: String?
                 let arch: String?
+            }
+        }
+    }
+
+    /// Mojang's argument lists (`arguments.jvm` / `arguments.game`): each
+    /// element is either a bare string or a rule-guarded value.
+    struct LaunchArguments: Decodable {
+        let jvm: [VersionArgument]?
+        let game: [VersionArgument]?
+    }
+
+    enum VersionArgument: Decodable {
+        case literal(String)
+        case guarded(rules: [LibraryReference.Rule], values: [String])
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+
+            if let literal = try? container.decode(String.self) {
+                self = .literal(literal)
+                return
+            }
+
+            struct Coded: Decodable {
+                let rules: [VersionPackage.LibraryReference.Rule]?
+                let value: ValueUnion
+
+                enum ValueUnion: Decodable {
+                    case one(String)
+                    case many([String])
+
+                    init(from decoder: Decoder) throws {
+                        let valueContainer = try decoder.singleValueContainer()
+                        if let single = try? valueContainer.decode(String.self) {
+                            self = .one(single)
+                            return
+                        }
+                        self = .many(try valueContainer.decode([String].self))
+                    }
+                }
+            }
+
+            let coded = try container.decode(Coded.self)
+            switch coded.value {
+            case .one(let single):
+                self = .guarded(rules: coded.rules ?? [], values: [single])
+            case .many(let many):
+                self = .guarded(rules: coded.rules ?? [], values: many)
             }
         }
     }
@@ -472,6 +522,38 @@ final class MojangDownloader {
         }
         try Self.install(temporary, at: destination)
         progress(counter.increment(), counter.total)
+    }
+
+    /// Extracts the OS-relevant, launcher-independent JVM flags declared by a
+    /// version's manifest (`arguments.jvm`). This is the future-proofing
+    /// channel: any new flag Mojang ships for a new SDL/GL/Vulkan backend
+    /// flows through automatically, no launcher update required.
+    ///
+    /// Dropped on purpose: `-cp` (Blocky builds its own classpath) and every
+    /// `${template}` value (`${classpath}`, `${natives_directory}` …) whose
+    /// expansion is Blocky's own job or whose directories the game fills at
+    /// runtime from the classpath.
+    static func jvmFlags(in package: VersionPackage) -> [String] {
+        guard let jvmArguments = package.arguments?.jvm else { return [] }
+
+        var flags: [String] = []
+        func collect(_ values: [String]) {
+            for value in values where value != "-cp" {
+                flags.append(value)
+            }
+        }
+
+        for argument in jvmArguments {
+            switch argument {
+            case .literal(let literal):
+                collect([literal])
+            case .guarded(let rules, let values):
+                guard rulesAllow(rules) else { continue }
+                collect(values)
+            }
+        }
+
+        return flags.filter { !$0.contains("${") }
     }
 
     // MARK: Resolution helpers
