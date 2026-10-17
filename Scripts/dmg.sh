@@ -29,8 +29,11 @@ tell application "Finder"
     open theDisk
     set theWindow to container window of theDisk
     set current view of theWindow to icon view
-    set icon size of theWindow to 96
-    set text size of theWindow to 11
+    tell icon view options of theWindow
+        set icon size to 96
+        set text size to 11
+        set arrangement to not arranged
+    end tell
     set toolbar visible of theWindow to false
     set statusbar visible of theWindow to false
     set bounds of theWindow to {120, 120, 780, 520}
