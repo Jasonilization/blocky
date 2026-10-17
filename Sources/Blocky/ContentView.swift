@@ -46,6 +46,11 @@ struct ContentView: View {
     static let panelWidth: CGFloat = 372
     static let expandedWidth: CGFloat = collapsedWidth + panelWidth
     static let windowHeight: CGFloat = 452
+    /// The hidden titlebar's strip: window content is 480 pt tall, of which
+    /// the top 28 is the (invisible) titlebar area over which the backdrop
+    /// must bleed to cover the window edge-to-edge.
+    static let titleBarBleed: CGFloat = 28
+    static let fullWindowHeight: CGFloat = windowHeight + titleBarBleed
     static let foldDuration: Double = 1.0
 
     /// Two-tap delete confirmation state for the versions list.
@@ -55,16 +60,27 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            backgroundLayer
-                .ignoresSafeArea()
+            // Stretch marker: keeps the ZStack tracking the window's width so
+            // the top-trailing controls ride the live edge. Everything visual
+            // is fixed-size — no layer anywhere scales with window resizes,
+            // which is what makes the fold's boundary snaps pixel-clean.
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             mainColumn
                 .frame(width: Self.collapsedWidth)
+                // The backdrop is pinned to the constant FULL-WINDOW size and
+                // bleeds under the hidden titlebar — covers edge-to-edge and
+                // never re-lays (or squishes) when the window folds.
+                .background(alignment: .topLeading) {
+                    backgroundLayer
+                        .frame(width: Self.expandedWidth, height: Self.fullWindowHeight)
+                        .ignoresSafeArea(edges: .top)
+                }
                 // The panel rides an OVERLAY — overlays never contribute to
-                // layout sizing, so the window's true minimum is the main
-                // column. The window itself clips and reveals the panel as
-                // the fold sweeps its width, and the panel fades with the
-                // fold so the whole thing dissolves as one window.
+                // layout sizing. The window clips and reveals it, and the
+                // panel fades with the fold so the whole thing dissolves as
+                // one window.
                 .overlay(alignment: .topLeading) {
                     PanelFade(fold: fold) {
                         rightPanel
@@ -91,13 +107,46 @@ struct ContentView: View {
     // MARK: Background
 
     private var backgroundLayer: some View {
-        if let style = PixelBackgroundStyle(rawValue: backgroundRaw), style != .frosted {
+        // Frosted keeps its glass; pixel styles are truly transparent —
+        // no material behind them, just blocks floating over the desktop.
+        // Half-built and dissolved regions show the raw desktop through
+        // the window.
+        if PixelBackgroundStyle(rawValue: backgroundRaw) != .frosted,
+           let style = PixelBackgroundStyle(rawValue: backgroundRaw) {
             return AnyView(
-                PixelBackgroundView(style: style, fold: fold, assetsDirectory: engine.assetsDirectory)
-                    .overlay(Color.black.opacity(style.scrim))
+                ZStack(alignment: .topLeading) {
+                    PixelBackgroundView(style: style, fold: fold, assetsDirectory: engine.assetsDirectory)
+                    // Readability scrim over the main column only — it fades
+                    // out exactly where the dissolvable panel begins, so the
+                    // expanding region stays genuinely clear.
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black.opacity(style.scrim), location: 0.0),
+                            .init(color: .black.opacity(style.scrim), location: 0.47),
+                            .init(color: .black.opacity(style.scrim / 2), location: 0.53),
+                            .init(color: .black.opacity(0), location: 0.60),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    // Panel readability backing — rides the SAME fade as the
+                    // panel's text: the build-up stays raw and transparent,
+                    // and the darkening arrives only with the content.
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black.opacity(0.0), location: 0.0),
+                            .init(color: .black.opacity(0.42), location: 0.06),
+                            .init(color: .black.opacity(0.42), location: 1.0),
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: Self.panelWidth + 6, alignment: .leading)
+                    .offset(x: Self.collapsedWidth - 3)
+                    .opacity(fold.panelOpacity)
+                }
             )
         }
-        // Default: fully translucent frosted glass.
         return AnyView(Color.clear.background(.ultraThinMaterial))
     }
 
@@ -386,7 +435,7 @@ struct ContentView: View {
                 Divider().opacity(0.6)
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 14) {
                 panelHeader("TERMINAL")
                 Spacer()
                 Button("Clear") {
@@ -395,23 +444,35 @@ struct ContentView: View {
                 .buttonStyle(.link)
                 .font(.system(size: 9.5, weight: .medium, design: .monospaced))
 
-                // Expand-terminal toggle — only exists while the panel is open.
+                // Expand-terminal toggle — only exists while the panel is
+                // open. When focused it fills with the accent color so the
+                // way back is impossible to miss.
                 Button {
                     withAnimation(.easeInOut(duration: 0.25)) {
                         terminalFocus.toggle()
                     }
                 } label: {
                     Image(systemName: terminalFocus
-                          ? "rectangle.collapse.vertical"
+                          ? "chevron.down"
                           : "rectangle.expand.vertical")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(terminalFocus
-                                         ? Color.accentColor
-                                         : Color.primary.opacity(0.45))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(terminalFocus ? Color.white : Color.primary.opacity(0.55))
+                        .frame(width: 26, height: 22)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(terminalFocus
+                                      ? Color.accentColor.opacity(0.85)
+                                      : Color.primary.opacity(0.08))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
+                        )
                 }
                 .buttonStyle(.plain)
                 .help(terminalFocus ? "Bring settings back" : "Expand the terminal")
             }
+            .padding(.bottom, 4)
 
             terminalView
 
@@ -762,6 +823,19 @@ final class FoldState: ObservableObject {
     init(expanded: Bool = false) {
         progress = expanded ? 1 : 0
     }
+
+    /// The panel UI's own opacity — one timing for the widgets AND their
+    /// readability scrim. Collapsing: text dies immediately; expanding:
+    /// the pixels build first, the text (and its backing) arrive last.
+    var panelOpacity: Double {
+        if !isAnimating {
+            return progress > 0.5 ? 1 : 0
+        }
+        if direction < 0 {
+            return max(0, min(1, (progress - 0.80) / 0.15))
+        }
+        return max(0, min(1, (progress - 0.72) / 0.20))
+    }
 }
 
 /// Fades the panel's UI in step with the fold so the minimize feels complete:
@@ -772,16 +846,7 @@ private struct PanelFade<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        content.opacity(panelContentOpacity)
-    }
-
-    private var panelContentOpacity: Double {
-        if !fold.isAnimating {
-            return fold.progress > 0.5 ? 1 : 0
-        }
-        // The panel's UI dies EARLY — before its backdrop blocks go — so the
-        // dissolve reads as pure pixel disappearance, never sliding widgets.
-        return max(0, min(1, (fold.progress - 0.12) * 3.2))
+        content.opacity(fold.panelOpacity)
     }
 }
 
@@ -889,21 +954,259 @@ enum PixelBackgroundStyle: String, CaseIterable, Identifiable {
         }
     }
 
-    /// How much dark scrim keeps UI text readable over the texture.
+    /// How much dark scrim keeps UI text readable over the glass — light,
+    /// since the blocks carry most of their own darkness.
     var scrim: Double {
         switch self {
         case .frosted:    return 0.0
-        case .grass:      return 0.58
-        case .dirt:       return 0.52
-        case .stone:      return 0.52
-        case .cobblestone: return 0.52
-        case .planks:     return 0.52
-        case .sandstone:  return 0.58
-        case .netherrack: return 0.52
-        case .endstone:   return 0.58
-        case .deepslate:  return 0.38
-        case .obsidian:   return 0.34
+        case .grass:      return 0.32
+        case .dirt:       return 0.28
+        case .stone:      return 0.28
+        case .cobblestone: return 0.28
+        case .planks:     return 0.28
+        case .sandstone:  return 0.32
+        case .netherrack: return 0.28
+        case .endstone:   return 0.32
+        case .deepslate:  return 0.18
+        case .obsidian:   return 0.15
         }
+    }
+}
+
+// MARK: - Backdrop renderer + cache
+
+/// Renders the full backdrop (all blocks alive) ONCE per style into a
+/// 712×452 image, then serves blits. Folds never recompute texels — they
+/// only draw cached block regions with per-block alpha — which is what
+/// makes the dissolve frame cost ~0.2 ms instead of ~10 ms of texel math.
+enum BackdropRenderer {
+    private static var cache: [String: (image: CGImage, blocks: [[CGImage]], mainStrip: CGImage)] = [:]
+    private static let lock = NSLock()
+
+    static let canvasWidth: CGFloat = 712
+    static let canvasHeight: CGFloat = ContentView.fullWindowHeight   // 480 incl. titlebar bleed
+    static let block: CGFloat = 28
+
+    /// Renders the backdrop AND pre-slices its block grid in one pass, so
+    /// folds never slice mid-animation (no first-fold hitch, no flash).
+    static func cache(for style: PixelBackgroundStyle, assetsDirectory: URL)
+        -> (image: CGImage, blocks: [[CGImage]], mainStrip: CGImage)? {
+        guard style != .frosted else { return nil }
+        lock.lock()
+        if let cached = cache[style.rawValue] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let image = render(style: style, assetsDirectory: assetsDirectory)
+        let step = Int(block)
+        var grid: [[CGImage]] = []
+        for row in 0...(image.height / step) {
+            var rowBlocks: [CGImage] = []
+            let y = row * step
+            let height = min(step, image.height - y)
+            guard height > 0 else { continue }
+            for column in 0...(image.width / step) {
+                let x = column * step
+                let width = min(step, image.width - x)
+                guard width > 0 else { continue }
+                rowBlocks.append(image.cropping(to: CGRect(x: x, y: y, width: width, height: height)) ?? image)
+            }
+            grid.append(rowBlocks)
+        }
+
+        // Pre-cropped main-column strip — one allocation at cache time,
+        // not one per frame.
+        let mainColumns = Int((ContentView.collapsedWidth / block).rounded(.up)) + 1
+        let stripWidth = min(Int(CGFloat(mainColumns) * block), image.width)
+        let mainStrip = image.cropping(to: CGRect(x: 0, y: 0, width: stripWidth, height: image.height)) ?? image
+
+        let entry = (image, grid, mainStrip)
+        lock.lock()
+        cache[style.rawValue] = entry
+        lock.unlock()
+        return entry
+    }
+
+    private static func render(style: PixelBackgroundStyle, assetsDirectory: URL) -> CGImage {
+
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let ctx = CGContext(
+            data: nil,
+            width: Int(canvasWidth), height: Int(canvasHeight),
+            bitsPerComponent: 8, bytesPerRow: 0, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+
+        let official = OfficialTextures.texture(for: style, assetsDirectory: assetsDirectory)
+        let block: CGFloat = BackdropRenderer.block
+        let texels = 8
+        let texel = block / CGFloat(texels)
+        let columns = Int(canvasWidth / block) + 1
+        let rows = Int(canvasHeight / block) + 1
+
+        func seeded(_ i: Int) -> Double {
+            var value = abs(Double(i % 100003) + 0.5)
+            value = sin(value * 12.9898) * 43758.5453
+            return value - value.rounded(.towardZero)
+        }
+
+        for row in 0..<rows {
+            for column in 0..<columns {
+                let blockSeed = column &* 73856093 &+ row &* 19349663
+                let blockX = CGFloat(column) * block
+                let blockY = CGFloat(row) * block
+
+                if let official {
+                    ctx.saveGState()
+                    let rotation = Double((blockSeed &+ 5) % 4) * .pi / 2
+                    if rotation != 0 {
+                        ctx.translateBy(x: blockX + block / 2, y: blockY + block / 2)
+                        ctx.rotate(by: CGFloat(rotation))
+                        ctx.translateBy(x: -block / 2, y: -block / 2)
+                    } else {
+                        ctx.translateBy(x: blockX, y: blockY)
+                    }
+                    ctx.interpolationQuality = .none
+                    ctx.draw(official, in: CGRect(x: 0, y: 0, width: block, height: block))
+                    ctx.restoreGState()
+                    continue
+                }
+
+                let blockShade = CGFloat(0.86 + seeded(blockSeed &+ 3) * 0.28)
+                for ty in 0..<texels {
+                    for tx in 0..<texels {
+                        let texelSeed = blockSeed &+ tx &* 83492791 &+ ty &* 2971215073
+                        let noise = seeded(texelSeed)
+                        let shade = texelShade(style: style, tx: tx, ty: ty, noise: noise, blockSeed: blockSeed)
+                        let rgb = palette(style: style, shade: shade)
+                        ctx.setFillColor(
+                            red: rgb.0 * Double(blockShade),
+                            green: rgb.1 * Double(blockShade),
+                            blue: rgb.2 * Double(blockShade),
+                            alpha: 1
+                        )
+                        ctx.fill(CGRect(
+                            x: blockX + CGFloat(tx) * texel,
+                            y: blockY + CGFloat(ty) * texel,
+                            width: texel + 0.5, height: texel + 0.5
+                        ))
+                    }
+                }
+            }
+        }
+
+        let image = ctx.makeImage()!
+        return image
+    }
+
+    /// Style-specific shading: returns a 0…1 palette index. (Mirrors the
+    /// in-app procedural generator so cached backdrops look identical.)
+    private static func texelShade(style: PixelBackgroundStyle, tx: Int, ty: Int,
+                                   noise: Double, blockSeed: Int) -> Double {
+        func seeded(_ i: Int) -> Double {
+            var value = abs(Double(i % 100003) + 0.5)
+            value = sin(value * 12.9898) * 43758.5453
+            return value - value.rounded(.towardZero)
+        }
+        let texels = 8
+        func clustered(_ tx: Int, _ ty: Int) -> Double {
+            seeded(blockSeed &+ (tx / 2) &* 2971 &+ (ty / 2) &* 7331)
+        }
+        func rowOf(_ seed: Int) -> Int { (seed / 19349663) % 97 }
+
+        switch style {
+        case .frosted: return 0.5
+        case .grass:
+            if ty <= 1 { return noise < 0.18 ? 0.5 : 0.85 }
+            if ty == 2 { return seeded(blockSeed &+ tx &* 733) > 0.45 ? 0.7 : 0.55 }
+            if ty == 3 && noise < 0.3 { return 0.6 }
+            if noise < 0.22 { return 0.22 }
+            if noise > 0.9 { return 0.75 }
+            return 0.45 + clustered(tx, ty) * 0.15
+        case .dirt:
+            if noise < 0.22 { return 0.22 }
+            if noise > 0.9 { return 0.75 }
+            return 0.5
+        case .stone:
+            let c = clustered(tx, ty)
+            if c < 0.3 { return 0.3 }
+            if c > 0.78 { return 0.68 }
+            return 0.5
+        case .cobblestone:
+            let border = tx == 0 || ty == 0 || tx == texels - 1 || ty == texels - 1
+            if border { return 0.22 }
+            return clustered(tx, ty) < 0.35 ? 0.38 : 0.62
+        case .planks:
+            if ty == 0 { return 0.2 }
+            if ty == texels - 1 && seeded(blockSeed &+ 505) > 0.7 { return 0.42 }
+            if seeded(blockSeed &+ tx &* 971) < 0.3 { return 0.36 }
+            if seeded(blockSeed) > 0.93 && (tx == 3 || tx == 4) && (ty == 3 || ty == 4) { return 0.3 }
+            return 0.55
+        case .sandstone:
+            if ty == 0 && rowOf(blockSeed) % 3 == 0 { return 0.4 }
+            if noise < 0.12 { return 0.42 }
+            return 0.62
+        case .netherrack:
+            let c = clustered(tx, ty)
+            if c < 0.28 { return 0.25 }
+            if noise > 0.955 { return 0.8 }
+            return 0.5
+        case .endstone:
+            let c = clustered(tx, ty)
+            if c < 0.34 { return 0.42 }
+            if c > 0.82 { return 0.72 }
+            return 0.58
+        case .deepslate:
+            if noise < 0.1 { return 0.2 }
+            if noise > 0.96 { return 0.55 }
+            return 0.36
+        case .obsidian:
+            let streak = seeded(blockSeed &+ ty &* 6151) > 0.86
+            if streak && tx % 2 == 0 { return 0.5 }
+            if noise < 0.1 { return 0.1 }
+            return 0.28
+        }
+    }
+
+    private static func palette(style: PixelBackgroundStyle, shade: Double) -> (Double, Double, Double) {
+        let ramps: [[Double]] = [
+            [0.16, 0.34, 0.12, 0.42, 0.66, 0.30, 0.55, 0.82, 0.42],
+            [0.22, 0.15, 0.10, 0.42, 0.29, 0.19, 0.58, 0.43, 0.30],
+            [0.28, 0.28, 0.30, 0.46, 0.46, 0.48, 0.62, 0.62, 0.64],
+            [0.26, 0.26, 0.28, 0.44, 0.44, 0.46, 0.60, 0.60, 0.62],
+            [0.30, 0.22, 0.12, 0.52, 0.40, 0.24, 0.68, 0.55, 0.35],
+            [0.52, 0.45, 0.30, 0.72, 0.64, 0.44, 0.86, 0.79, 0.60],
+            [0.20, 0.06, 0.05, 0.42, 0.13, 0.10, 0.58, 0.22, 0.16],
+            [0.48, 0.46, 0.30, 0.66, 0.63, 0.44, 0.82, 0.79, 0.60],
+            [0.07, 0.07, 0.09, 0.15, 0.15, 0.18, 0.22, 0.22, 0.26],
+            [0.04, 0.02, 0.09, 0.10, 0.05, 0.18, 0.20, 0.12, 0.34],
+        ]
+        let index: Int
+        switch style {
+        case .frosted, .grass: index = 0
+        case .dirt: index = 1
+        case .stone: index = 2
+        case .cobblestone: index = 3
+        case .planks: index = 4
+        case .sandstone: index = 5
+        case .netherrack: index = 6
+        case .endstone: index = 7
+        case .deepslate: index = 8
+        case .obsidian: index = 9
+        }
+        let ramp = ramps[index]
+        let t = max(0.0, min(1.0, shade))
+        let segment = t < 0.5 ? 0 : 1
+        let local = t < 0.5 ? t * 2 : (t - 0.5) * 2
+        let low = (ramp[segment * 3], ramp[segment * 3 + 1], ramp[segment * 3 + 2])
+        let high = (ramp[segment * 3 + 3], ramp[segment * 3 + 4], ramp[segment * 3 + 5])
+        return (
+            low.0 + (high.0 - low.0) * local,
+            low.1 + (high.1 - low.1) * local,
+            low.2 + (high.2 - low.2) * local
+        )
     }
 }
 
@@ -912,109 +1215,79 @@ private struct PixelBackgroundView: View {
     @ObservedObject var fold: FoldState
     let assetsDirectory: URL
 
-    private static let block: CGFloat = 44
-    private static let texels = 8
-
     var body: some View {
         Canvas { context, size in
-            guard style != .frosted else { return }
-            let block = Self.block
-            let columns = Int(size.width / block) + 1
-            let rows = Int(size.height / block) + 1
-            let dissolving = fold.isAnimating
-            let official = OfficialTextures.texture(for: style, assetsDirectory: assetsDirectory)
+            guard style != .frosted,
+                  let (_, grid, mainStrip) = BackdropRenderer.cache(for: style, assetsDirectory: assetsDirectory)
+            else { return }
+
+            // One render path for idle AND fold states: the main strip plus
+            // the panel's block grid. Settled states are just "all alphas
+            // known" — so the instant a fold ends, the picture is bit-identical
+            // to the last animation frame. No settle flash, ever.
+            let block = BackdropRenderer.block
+            let mainColumns = Int((ContentView.collapsedWidth / block).rounded(.up)) + 1
+
+            let isAnimating = fold.isAnimating
+            let panelAlive = fold.isAnimating || fold.progress > 0.5
 
             context.withCGContext { ctx in
-                // Opaque base: dissolving blocks fade toward solid dark, never
-                // toward see-through — no transparency flash during the fold.
-                ctx.setFillColor(red: 0.055, green: 0.063, blue: 0.086, alpha: 1)
-                ctx.fill(CGRect(origin: .zero, size: size))
+                ctx.interpolationQuality = .none
 
-                for row in 0..<rows {
-                    for column in 0..<columns {
-                        let blockSeed = column &* 73856093 &+ row &* 19349663
+                // Main column strip — cached subimage, always alive.
+                let stripWidth = min(CGFloat(mainStrip.width), size.width)
+                ctx.draw(mainStrip, in: CGRect(x: 0, y: 0, width: stripWidth, height: size.height))
+
+                // Panel blocks. Two passes: fully-opaque blocks draw with no
+                // per-block state changes; only the fading band pays for
+                // saveGState/setAlpha/restoreGState.
+                var fading: [(CGImage, CGRect, Double)] = []
+                ctx.setAlpha(1)
+
+                for (rowIndex, rowBlocks) in grid.enumerated() {
+                    let blockY = CGFloat(rowIndex) * block
+                    guard blockY < size.height else { break }
+                    for column in mainColumns..<rowBlocks.count {
                         let blockX = CGFloat(column) * block
-                        let blockY = CGFloat(row) * block
+                        guard blockX < size.width else { break }
 
-                        // ── Per-PIXEL dissolve: every texel of the backdrop
-                        // carries its own threshold. Its block's position sets
-                        // the coarse gate; the 64 pixels inside then scatter
-                        // across a short window — so during a fold they wink
-                        // out one by one, sweeping across the panel.
-                        let inPanelRegion = blockX >= ContentView.collapsedWidth - block
-                        let xNorm = max(0, min(1,
-                            (blockX - ContentView.collapsedWidth) / ContentView.panelWidth))
-                        let blockGate = 0.02 + xNorm * 0.77
-                            + seeded(blockSeed &+ 101) * 0.08
-
-                        // Authentic texture path: one crisp draw per block,
-                        // fading as a chunk (per-pixel scatter is a
-                        // procedural-path luxury).
-                        if let official {
-                            let alpha: Double
-                            if dissolving, inPanelRegion {
-                                alpha = max(0, min(1, (fold.progress - blockGate) / 0.06))
-                            } else {
-                                alpha = 1
-                            }
-                            guard alpha > 0 else { continue }
-
-                            ctx.saveGState()
-                            ctx.setAlpha(alpha)
-                            let rotation = Double((blockSeed &+ 5) % 4) * .pi / 2
-                            if rotation != 0 {
-                                ctx.translateBy(x: blockX + block / 2, y: blockY + block / 2)
-                                ctx.rotate(by: CGFloat(rotation))
-                                ctx.translateBy(x: -block / 2, y: -block / 2)
-                            } else {
-                                ctx.translateBy(x: blockX, y: blockY)
-                            }
-                            ctx.interpolationQuality = .none
-                            ctx.draw(official, in: CGRect(x: 0, y: 0, width: block, height: block))
-                            ctx.restoreGState()
-                            continue
+                        let alpha: Double
+                        if !isAnimating {
+                            alpha = panelAlive ? 1 : 0   // settled: whole or nothing
+                        } else {
+                            let xNorm = max(0, min(1,
+                                (blockX - ContentView.collapsedWidth) / ContentView.panelWidth))
+                            let blockSeed = column &* 73856093 &+ rowIndex &* 19349663
+                            let threshold = 0.02 + xNorm * 0.77
+                                + seeded(blockSeed &+ 101) * 0.08
+                            // Wide fade window (0.14 of the fold) — each block
+                            // crossfades over ~8 frames instead of popping.
+                            alpha = max(0, min(1, (fold.progress - threshold) / 0.14))
                         }
+                        if alpha <= 0 { continue }
 
-                        // Procedural path: true per-pixel death.
-                        let texel = block / CGFloat(Self.texels)
-                        let blockShade = CGFloat(0.86 + seeded(blockSeed &+ 3) * 0.28)
-                        for ty in 0..<Self.texels {
-                            for tx in 0..<Self.texels {
-                                let texelSeed = blockSeed &+ tx &* 83492791 &+ ty &* 2971215073
-                                let noise = seeded(texelSeed)
-
-                                var alpha: Double = 1
-                                if dissolving, inPanelRegion {
-                                    let withinBlock = Double(tx + ty * Self.texels)
-                                        / Double(Self.texels * Self.texels)
-                                    let threshold = blockGate
-                                        + withinBlock * 0.09
-                                        + noise * 0.03
-                                    alpha = max(0, min(1, (fold.progress - threshold) / 0.025))
-                                }
-                                if alpha <= 0 { continue }
-
-                                let shade = texelShade(tx: tx, ty: ty, noise: noise, blockSeed: blockSeed)
-                                let rgb = paletteColor(shade)
-
-                                ctx.setFillColor(red: rgb.0 * blockShade, green: rgb.1 * blockShade,
-                                                  blue: rgb.2 * blockShade, alpha: alpha)
-                                ctx.fill(CGRect(
-                                    x: blockX + CGFloat(tx) * texel,
-                                    y: blockY + CGFloat(ty) * texel,
-                                    width: texel + 0.5,
-                                    height: texel + 0.5
-                                ))
-                            }
+                        let rect = CGRect(x: blockX, y: blockY, width: block, height: block)
+                        if alpha >= 1 {
+                            ctx.draw(rowBlocks[column], in: rect)
+                        } else {
+                            fading.append((rowBlocks[column], rect, alpha))
                         }
                     }
                 }
+
+                for (image, rect, alpha) in fading {
+                    ctx.saveGState()
+                    ctx.setAlpha(alpha)
+                    ctx.draw(image, in: rect)
+                    ctx.restoreGState()
+                }
+                ctx.setAlpha(1)
             }
         }
-        // Vignette — pools light in the center so the launcher reads first.
+        // Vignette — light; pools a little depth in the center.
         .overlay(
             RadialGradient(
-                colors: [.black.opacity(0.0), .black.opacity(0.34)],
+                colors: [.black.opacity(0.0), .black.opacity(0.15)],
                 center: .center,
                 startRadius: 80,
                 endRadius: 560
@@ -1027,117 +1300,6 @@ private struct PixelBackgroundView: View {
         var value = abs(Double(i % 100003) + 0.5)
         value = sin(value * 12.9898) * 43758.5453
         return value - value.rounded(.towardZero)   // fract()
-    }
-
-    /// Cluster noise — 2×2 texel groups share one value for stony blobs.
-    private func clustered(tx: Int, ty: Int, blockSeed: Int) -> Double {
-        seeded(blockSeed &+ (tx / 2) &* 2971 &+ (ty / 2) &* 7331)
-    }
-
-    /// Style-specific shading: returns a 0…1 palette index.
-    private func texelShade(tx: Int, ty: Int, noise: Double, blockSeed: Int) -> Double {
-        switch style {
-        case .frosted:
-            return 0.5
-        case .grass:
-            // The iconic grass-block side: a ragged green crown over dirt.
-            if ty <= 1 { return noise < 0.18 ? 0.5 : 0.85 }           // crown
-            if ty == 2 { return seeded(blockSeed &+ tx &* 733) > 0.45 ? 0.7 : 0.55 }  // ragged edge
-            if ty == 3 && noise < 0.3 { return 0.6 }                  // hanging blades
-            if noise < 0.22 { return 0.22 }                          // dark clods
-            if noise > 0.9 { return 0.75 }                           // pale grit
-            return 0.45 + clustered(tx: tx, ty: ty, blockSeed: blockSeed) * 0.15
-        case .dirt:
-            if noise < 0.22 { return 0.22 }
-            if noise > 0.9 { return 0.75 }
-            return 0.5
-        case .stone:
-            let c = clustered(tx: tx, ty: ty, blockSeed: blockSeed)
-            if c < 0.3 { return 0.3 }
-            if c > 0.78 { return 0.68 }
-            return 0.5
-        case .cobblestone:
-            let border = tx == 0 || ty == 0 || tx == Self.texels - 1 || ty == Self.texels - 1
-            if border { return 0.22 }                                 // grout
-            let c = clustered(tx: tx, ty: ty, blockSeed: blockSeed)
-            return c < 0.35 ? 0.38 : 0.62
-        case .planks:
-            if ty == 0 { return 0.2 }                                 // seam
-            if ty == Self.texels - 1 && seeded(blockSeed &+ 505) > 0.7 { return 0.42 }  // bevel
-            let grain = seeded(blockSeed &+ tx &* 971) < 0.3
-            if grain { return 0.36 }
-            if seeded(blockSeed) > 0.93 && (tx == 3 || tx == 4) && (ty == 3 || ty == 4) { return 0.3 }  // knot
-            return 0.55
-        case .sandstone:
-            if ty == 0 && rowOf(blockSeed) % 3 == 0 { return 0.4 }    // strata
-            if noise < 0.12 { return 0.42 }
-            return 0.62
-        case .netherrack:
-            let c = clustered(tx: tx, ty: ty, blockSeed: blockSeed)
-            if c < 0.28 { return 0.25 }                               // maroon veins
-            if noise > 0.955 { return 0.8 }                           // ember glints
-            return 0.5
-        case .endstone:
-            let c = clustered(tx: tx, ty: ty, blockSeed: blockSeed)
-            if c < 0.34 { return 0.42 }                               // dimples
-            if c > 0.82 { return 0.72 }
-            return 0.58
-        case .deepslate:
-            if noise < 0.1 { return 0.2 }
-            if noise > 0.96 { return 0.55 }                           // mica sparkle
-            return 0.36
-        case .obsidian:
-            let streak = seeded(blockSeed &+ ty &* 6151) > 0.86
-            if streak && tx % 2 == 0 { return 0.5 }                   // lavender sheen
-            if noise < 0.1 { return 0.1 }
-            return 0.28
-        }
-    }
-
-    private func rowOf(_ blockSeed: Int) -> Int {
-        (blockSeed / 19349663) % 97
-    }
-
-    /// Palette ramp: 0 = darkest shade of the style, 1 = brightest.
-    private func paletteColor(_ shade: Double) -> (Double, Double, Double) {
-        let ramps: [[Double]] = [
-            // (dark … light) per style, RGB 0…1
-            [0.16, 0.34, 0.12,   0.42, 0.66, 0.30,   0.55, 0.82, 0.42],   // grass greens
-            [0.22, 0.15, 0.10,   0.42, 0.29, 0.19,   0.58, 0.43, 0.30],   // dirt browns
-            [0.28, 0.28, 0.30,   0.46, 0.46, 0.48,   0.62, 0.62, 0.64],   // stone grays
-            [0.26, 0.26, 0.28,   0.44, 0.44, 0.46,   0.60, 0.60, 0.62],   // cobble grays
-            [0.30, 0.22, 0.12,   0.52, 0.40, 0.24,   0.68, 0.55, 0.35],   // plank oaks
-            [0.52, 0.45, 0.30,   0.72, 0.64, 0.44,   0.86, 0.79, 0.60],   // sandstone
-            [0.20, 0.06, 0.05,   0.42, 0.13, 0.10,   0.58, 0.22, 0.16],   // netherrack reds
-            [0.48, 0.46, 0.30,   0.66, 0.63, 0.44,   0.82, 0.79, 0.60],   // end stone
-            [0.07, 0.07, 0.09,   0.15, 0.15, 0.18,   0.22, 0.22, 0.26],   // deepslate
-            [0.04, 0.02, 0.09,   0.10, 0.05, 0.18,   0.20, 0.12, 0.34],   // obsidian purples
-        ]
-        let rampIndex: Int
-        switch style {
-        case .frosted: rampIndex = 0
-        case .grass: rampIndex = 0
-        case .dirt: rampIndex = 1
-        case .stone: rampIndex = 2
-        case .cobblestone: rampIndex = 3
-        case .planks: rampIndex = 4
-        case .sandstone: rampIndex = 5
-        case .netherrack: rampIndex = 6
-        case .endstone: rampIndex = 7
-        case .deepslate: rampIndex = 8
-        case .obsidian: rampIndex = 9
-        }
-        let ramp = ramps[rampIndex]
-        let t = max(0.0, min(1.0, shade))
-        let segment = t < 0.5 ? 0 : 1
-        let local = t < 0.5 ? t * 2 : (t - 0.5) * 2
-        let low = (ramp[segment * 3], ramp[segment * 3 + 1], ramp[segment * 3 + 2])
-        let high = (ramp[segment * 3 + 3], ramp[segment * 3 + 4], ramp[segment * 3 + 5])
-        return (
-            low.0 + (high.0 - low.0) * local,
-            low.1 + (high.1 - low.1) * local,
-            low.2 + (high.2 - low.2) * local
-        )
     }
 }
 
@@ -1191,6 +1353,7 @@ private struct WindowConfigurator: NSViewRepresentable {
 
     final class Coordinator {
         var lastTarget: Bool?
+        var isGliding = false
         fileprivate var displayLink: CVDisplayLink?
         fileprivate var foldContext: UnsafeMutableRawPointer?
         fileprivate var foldFrom: CGFloat = 0
@@ -1220,6 +1383,7 @@ private struct WindowConfigurator: NSViewRepresentable {
         weak var window: NSWindow?
         weak var coordinator: Coordinator?
         weak var foldState: FoldState?
+        var lastTick: Double = 0
 
         fileprivate func tick() {
             guard let window, let coordinator, let foldState else {
@@ -1241,21 +1405,34 @@ private struct WindowConfigurator: NSViewRepresentable {
                 foldState.isAnimating = false
                 foldState.direction = 0
 
-                // Collapse finishes by snapping the window over the
-                // now-empty dark region — the seam is invisible, nothing
-                // visibly slides.
+                // Collapse finishes with a short glide over the already-
+                // dissolved (empty, transparent) region. Every layer in the
+                // window is fixed-size, so this resize only sweeps a clip —
+                // no scaling, no jank — it just removes the jump.
                 if coordinator.foldTarget == 0 {
-                    var frame = window.frame
-                    frame.size.width = ContentView.collapsedWidth
-                    window.setFrame(frame, display: true)
+                    WindowConfigurator.glide(
+                        to: ContentView.collapsedWidth,
+                        window: window,
+                        coordinator: coordinator
+                    )
                 }
             }
         }
     }
 
-    fileprivate static let displayLinkCallback: CVDisplayLinkOutputCallback = { _, _, _, _, _, context in
+    fileprivate static let displayLinkCallback: CVDisplayLinkOutputCallback = { _, _, inNow, _, _, context in
         guard let context else { return kCVReturnSuccess }
         let box = Unmanaged<FoldBox>.fromOpaque(context).takeUnretainedValue()
+        // Cap at ~60 fps: on ProMotion displays the link fires at 120 Hz,
+        // which doubles canvas work for zero visible gain in a 1 s dissolve.
+        do {
+            let ts = inNow.pointee
+            let tickInterval = ts.videoTimeScale > 0
+                ? Double(ts.videoTime) / Double(ts.videoTimeScale)
+                : 0
+            if tickInterval - box.lastTick < 0.015 { return kCVReturnSuccess }
+            box.lastTick = tickInterval
+        }
         DispatchQueue.main.async { box.tick() }
         return kCVReturnSuccess
     }
@@ -1316,10 +1493,11 @@ private struct WindowConfigurator: NSViewRepresentable {
         if context.coordinator.lastTarget != expanded {
             context.coordinator.lastTarget = expanded
             startFold(to: expanded, window: window, coordinator: context.coordinator)
-        } else if !foldState.isAnimating, abs(window.frame.width - targetWidth) > 0.5 {
+        } else if !foldState.isAnimating, !context.coordinator.isGliding,
+                  abs(window.frame.width - targetWidth) > 0.5 {
             // Something (restored frames, stray sizing) drifted the window;
-            // snap it back to the settled fold state. Never during a fold —
-            // the window deliberately trails the dissolve.
+            // snap it back to the settled fold state. Never during a fold or
+            // a boundary glide — the window deliberately trails the dissolve.
             setFrame(width: targetWidth, of: window)
         }
     }
@@ -1353,11 +1531,14 @@ private struct WindowConfigurator: NSViewRepresentable {
         foldState.direction = target > from ? 1 : -1
         foldState.isAnimating = true
 
-        // Expand: the window opens FIRST — instantly, into darkness — and
-        // the backdrop's pixels materialize into it one by one. Collapse:
-        // the window stays put while every pixel dies, then snaps (in tick).
+        // Expand: the window glides open into empty space while the pixels
+        // materialize behind the sweep — no hard pop, no black box.
         if expanded {
-            setFrame(width: ContentView.expandedWidth, of: window)
+            WindowConfigurator.glide(
+                to: ContentView.expandedWidth,
+                window: window,
+                coordinator: coordinator
+            )
         }
 
         coordinator.foldFrom = from
@@ -1392,6 +1573,21 @@ private struct WindowConfigurator: NSViewRepresentable {
         t * t * (3 - 2 * t)
     }
 
+    /// Short eased window resize. Safe now that every layer is fixed-size:
+    /// the resize sweeps only a clip — nothing scales, so it stays smooth.
+    fileprivate static func glide(to width: CGFloat, window: NSWindow, coordinator: Coordinator) {
+        coordinator.isGliding = true
+        var frame = window.frame
+        frame.size.width = width
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            window.animator().setFrame(frame, display: true)
+        }, completionHandler: {
+            coordinator.isGliding = false
+        })
+    }
+
     private func setFrame(width: CGFloat, of window: NSWindow) {
         var frame = window.frame
         frame.size.width = width
@@ -1400,6 +1596,11 @@ private struct WindowConfigurator: NSViewRepresentable {
 
     private func configure(_ window: NSWindow?) {
         guard let window else { return }
+        // The fold owns this window's geometry; never let AppKit state
+        // restoration resurrect stale frames or spawn phantom windows.
+        window.isRestorable = false
+        window.invalidateRestorableState()
+        window.setFrameAutosaveName("")
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.backgroundColor = .clear
