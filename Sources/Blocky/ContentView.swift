@@ -873,6 +873,7 @@ enum OfficialTextures {
         case .endstone:   return "minecraft:block/end_stone.png"
         case .deepslate:  return "minecraft:block/deepslate.png"
         case .obsidian:   return "minecraft:block/obsidian.png"
+        case .water:      return "minecraft:block/water_still.png"
         }
     }
 
@@ -935,6 +936,7 @@ enum PixelBackgroundStyle: String, CaseIterable, Identifiable {
     case endstone
     case deepslate
     case obsidian
+    case water
 
     var id: String { rawValue }
 
@@ -951,6 +953,7 @@ enum PixelBackgroundStyle: String, CaseIterable, Identifiable {
         case .endstone:  return "End Stone"
         case .deepslate: return "Deepslate"
         case .obsidian:  return "Obsidian"
+        case .water:     return "Water · animated"
         }
     }
 
@@ -969,6 +972,7 @@ enum PixelBackgroundStyle: String, CaseIterable, Identifiable {
         case .endstone:   return 0.32
         case .deepslate:  return 0.18
         case .obsidian:   return 0.15
+        case .water:      return 0.30
         }
     }
 }
@@ -1118,6 +1122,7 @@ enum BackdropRenderer {
 
         switch style {
         case .frosted: return 0.5
+        case .water:   return 0.5   // handled by WaterRenderer, never drawn here
         case .grass:
             if ty <= 1 { return noise < 0.18 ? 0.5 : 0.85 }
             if ty == 2 { return seeded(blockSeed &+ tx &* 733) > 0.45 ? 0.7 : 0.55 }
@@ -1185,7 +1190,7 @@ enum BackdropRenderer {
         ]
         let index: Int
         switch style {
-        case .frosted, .grass: index = 0
+        case .frosted, .grass, .water: index = 0
         case .dirt: index = 1
         case .stone: index = 2
         case .cobblestone: index = 3
@@ -1210,90 +1215,231 @@ enum BackdropRenderer {
     }
 }
 
+// MARK: - Animated water (reads the game's real animated texture)
+
+/// Minecraft's water is an animated texture: `water_still.png` is a vertical
+/// STRIP of 16×16 frames. This reads it from the user's own game files
+/// (nothing bundled), splits it into frames, and tiles them at the game's
+/// tick rate — with a per-block phase so the surface waves across the window
+/// instead of pulsing in lockstep.
+enum WaterRenderer {
+    private static var framesCache: [CGImage]?
+    private static let lock = NSLock()
+
+    static let frameInterval: Double = 0.12   // ~8 fps ≈ Minecraft's water pace
+
+    static func frames(assetsDirectory: URL) -> [CGImage] {
+        lock.lock()
+        if let cached = framesCache {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        guard let strip = OfficialTextures.texture(for: .water, assetsDirectory: assetsDirectory),
+              strip.width > 0, strip.height >= strip.width else {
+            // No game files yet — fall back to a short procedural cycle.
+            let procedural = (0..<8).map { index -> CGImage in
+                let space = CGColorSpace(name: CGColorSpace.sRGB)!
+                let ctx = CGContext(
+                    data: nil, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 0,
+                    space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                )!
+                let phase = Double(index) / 8
+                for ty in 0..<16 {
+                    for tx in 0..<16 {
+                        let wave = sin((Double(tx) / 16) * .pi * 2 + phase * .pi * 2) * 0.5 + 0.5
+                        let depth = sin((Double(ty) / 16) * .pi + phase * .pi * 2) * 0.5 + 0.5
+                        let blue = 0.45 + wave * 0.22 + depth * 0.08
+                        ctx.setFillColor(red: 0.09 + wave * 0.05, green: 0.28 + depth * 0.10,
+                                         blue: blue, alpha: 1)
+                        ctx.fill(CGRect(x: tx, y: ty, width: 1, height: 1))
+                    }
+                }
+                return ctx.makeImage()!
+            }
+            lock.lock()
+            framesCache = procedural
+            lock.unlock()
+            return procedural
+        }
+
+        // The strip is N frames tall; slice it into 16×16 (or width×width) tiles.
+        let size = strip.width
+        var frames: [CGImage] = []
+        var y = 0
+        while y + size <= strip.height {
+            if let frame = strip.cropping(to: CGRect(x: 0, y: y, width: size, height: size)) {
+                frames.append(frame)
+            }
+            y += size
+        }
+        if frames.isEmpty { frames = [strip] }
+
+        lock.lock()
+        framesCache = frames
+        lock.unlock()
+        return frames
+    }
+}
+
 private struct PixelBackgroundView: View {
     let style: PixelBackgroundStyle
     @ObservedObject var fold: FoldState
     let assetsDirectory: URL
 
     var body: some View {
-        Canvas { context, size in
-            guard style != .frosted,
-                  let (_, grid, mainStrip) = BackdropRenderer.cache(for: style, assetsDirectory: assetsDirectory)
-            else { return }
+        if style == .water {
+            // Animated water: ticks continuously at Minecraft's water pace,
+            // with per-block phase so the surface waves instead of pulsing.
+            TimelineView(.animation(minimumInterval: WaterRenderer.frameInterval)) { timeline in
+                Canvas { context, size in
+                    draw(context: context, size: size, time: timeline.date.timeIntervalSinceReferenceDate)
+                }
+            }
+            .overlay(vignette)
+        } else {
+            Canvas { context, size in
+                draw(context: context, size: size, time: 0)
+            }
+            .overlay(vignette)
+        }
+    }
 
-            // One render path for idle AND fold states: the main strip plus
-            // the panel's block grid. Settled states are just "all alphas
-            // known" — so the instant a fold ends, the picture is bit-identical
-            // to the last animation frame. No settle flash, ever.
-            let block = BackdropRenderer.block
-            let mainColumns = Int((ContentView.collapsedWidth / block).rounded(.up)) + 1
+    private var vignette: some View {
+        RadialGradient(
+            colors: [.black.opacity(0.0), .black.opacity(0.15)],
+            center: .center,
+            startRadius: 80,
+            endRadius: 560
+        )
+        .allowsHitTesting(false)
+    }
 
+    private func draw(context: GraphicsContext, size: CGSize, time: Double) {
+        guard style != .frosted else { return }
+
+        // Water renders straight from the animated frames — no static grid.
+        if style == .water {
+            let frames = WaterRenderer.frames(assetsDirectory: assetsDirectory)
+            guard !frames.isEmpty else { return }
             let isAnimating = fold.isAnimating
             let panelAlive = fold.isAnimating || fold.progress > 0.5
+            let block = BackdropRenderer.block
+            let columns = Int(size.width / block) + 1
+            let rows = Int(size.height / block) + 1
 
             context.withCGContext { ctx in
                 ctx.interpolationQuality = .none
-
-                // Main column strip — cached subimage, always alive.
-                let stripWidth = min(CGFloat(mainStrip.width), size.width)
-                ctx.draw(mainStrip, in: CGRect(x: 0, y: 0, width: stripWidth, height: size.height))
-
-                // Panel blocks. Two passes: fully-opaque blocks draw with no
-                // per-block state changes; only the fading band pays for
-                // saveGState/setAlpha/restoreGState.
-                var fading: [(CGImage, CGRect, Double)] = []
-                ctx.setAlpha(1)
-
-                for (rowIndex, rowBlocks) in grid.enumerated() {
-                    let blockY = CGFloat(rowIndex) * block
+                for row in 0..<rows {
+                    let blockY = CGFloat(row) * block
                     guard blockY < size.height else { break }
-                    for column in mainColumns..<rowBlocks.count {
+                    for column in 0..<columns {
                         let blockX = CGFloat(column) * block
                         guard blockX < size.width else { break }
 
-                        let alpha: Double
-                        if !isAnimating {
-                            alpha = panelAlive ? 1 : 0   // settled: whole or nothing
-                        } else {
-                            let xNorm = max(0, min(1,
-                                (blockX - ContentView.collapsedWidth) / ContentView.panelWidth))
-                            let blockSeed = column &* 73856093 &+ rowIndex &* 19349663
-                            let threshold = 0.02 + xNorm * 0.77
-                                + seeded(blockSeed &+ 101) * 0.08
-                            // Wide fade window (0.14 of the fold) — each block
-                            // crossfades over ~8 frames instead of popping.
-                            alpha = max(0, min(1, (fold.progress - threshold) / 0.14))
+                        // Per-block phase: waves travel diagonally.
+                        let phase = Double(column + row)
+                        let index = Int((time / WaterRenderer.frameInterval + phase * 0.7)
+                            .truncatingRemainder(dividingBy: Double(frames.count)))
+                        let frame = frames[(index + frames.count) % frames.count]
+
+                        let inPanel = blockX >= ContentView.collapsedWidth
+                        var alpha: Double = 1
+                        if inPanel {
+                            if !isAnimating {
+                                alpha = panelAlive ? 1 : 0
+                            } else {
+                                let xNorm = max(0, min(1,
+                                    (blockX - ContentView.collapsedWidth) / ContentView.panelWidth))
+                                let blockSeed = column &* 73856093 &+ row &* 19349663
+                                let threshold = 0.02 + xNorm * 0.77
+                                    + seeded(blockSeed &+ 101) * 0.08
+                                alpha = max(0, min(1, (fold.progress - threshold) / 0.14))
+                            }
                         }
                         if alpha <= 0 { continue }
 
                         let rect = CGRect(x: blockX, y: blockY, width: block, height: block)
                         if alpha >= 1 {
-                            ctx.draw(rowBlocks[column], in: rect)
+                            ctx.draw(frame, in: rect)
                         } else {
-                            fading.append((rowBlocks[column], rect, alpha))
+                            ctx.saveGState()
+                            ctx.setAlpha(alpha)
+                            ctx.draw(frame, in: rect)
+                            ctx.restoreGState()
                         }
                     }
                 }
-
-                for (image, rect, alpha) in fading {
-                    ctx.saveGState()
-                    ctx.setAlpha(alpha)
-                    ctx.draw(image, in: rect)
-                    ctx.restoreGState()
-                }
-                ctx.setAlpha(1)
             }
+            return
         }
-        // Vignette — light; pools a little depth in the center.
-        .overlay(
-            RadialGradient(
-                colors: [.black.opacity(0.0), .black.opacity(0.15)],
-                center: .center,
-                startRadius: 80,
-                endRadius: 560
-            )
-            .allowsHitTesting(false)
-        )
+
+        guard let (_, grid, mainStrip) = BackdropRenderer.cache(for: style, assetsDirectory: assetsDirectory)
+        else { return }
+
+        // One render path for idle AND fold states: the main strip plus
+        // the panel's block grid. Settled states are just "all alphas
+        // known" — so the instant a fold ends, the picture is bit-identical
+        // to the last animation frame. No settle flash, ever.
+        let block = BackdropRenderer.block
+        let mainColumns = Int((ContentView.collapsedWidth / block).rounded(.up)) + 1
+
+        let isAnimating = fold.isAnimating
+        let panelAlive = fold.isAnimating || fold.progress > 0.5
+
+        context.withCGContext { ctx in
+            ctx.interpolationQuality = .none
+
+            // Main column strip — cached subimage, always alive.
+            let stripWidth = min(CGFloat(mainStrip.width), size.width)
+            ctx.draw(mainStrip, in: CGRect(x: 0, y: 0, width: stripWidth, height: size.height))
+
+            // Panel blocks. Two passes: fully-opaque blocks draw with no
+            // per-block state changes; only the fading band pays for
+            // saveGState/setAlpha/restoreGState.
+            var fading: [(CGImage, CGRect, Double)] = []
+            ctx.setAlpha(1)
+
+            for (rowIndex, rowBlocks) in grid.enumerated() {
+                let blockY = CGFloat(rowIndex) * block
+                guard blockY < size.height else { break }
+                for column in mainColumns..<rowBlocks.count {
+                    let blockX = CGFloat(column) * block
+                    guard blockX < size.width else { break }
+
+                    let alpha: Double
+                    if !isAnimating {
+                        alpha = panelAlive ? 1 : 0   // settled: whole or nothing
+                    } else {
+                        let xNorm = max(0, min(1,
+                            (blockX - ContentView.collapsedWidth) / ContentView.panelWidth))
+                        let blockSeed = column &* 73856093 &+ rowIndex &* 19349663
+                        let threshold = 0.02 + xNorm * 0.77
+                            + seeded(blockSeed &+ 101) * 0.08
+                        // Wide fade window (0.14 of the fold) — each block
+                        // crossfades over ~8 frames instead of popping.
+                        alpha = max(0, min(1, (fold.progress - threshold) / 0.14))
+                    }
+                    if alpha <= 0 { continue }
+
+                    let rect = CGRect(x: blockX, y: blockY, width: block, height: block)
+                    if alpha >= 1 {
+                        ctx.draw(rowBlocks[column], in: rect)
+                    } else {
+                        fading.append((rowBlocks[column], rect, alpha))
+                    }
+                }
+            }
+
+            for (image, rect, alpha) in fading {
+                ctx.saveGState()
+                ctx.setAlpha(alpha)
+                ctx.draw(image, in: rect)
+                ctx.restoreGState()
+            }
+            ctx.setAlpha(1)
+        }
     }
 
     private func seeded(_ i: Int) -> Double {
