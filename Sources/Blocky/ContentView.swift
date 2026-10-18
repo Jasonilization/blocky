@@ -1226,7 +1226,11 @@ enum WaterRenderer {
     private static var framesCache: [CGImage]?
     private static let lock = NSLock()
 
-    static let frameInterval: Double = 0.12   // ~8 fps ≈ Minecraft's water pace
+    static let frameInterval: Double = 0.25   // 4 fps — gentle on the GPU stack
+
+    /// Minecraft's actual water tint (the game's grayscale water_still is
+    /// biome-tinted at runtime — this is that color).
+    private static let waterTint = (red: 63.0 / 255.0, green: 118.0 / 255.0, blue: 228.0 / 255.0)
 
     static func frames(assetsDirectory: URL) -> [CGImage] {
         lock.lock()
@@ -1238,7 +1242,8 @@ enum WaterRenderer {
 
         guard let strip = OfficialTextures.texture(for: .water, assetsDirectory: assetsDirectory),
               strip.width > 0, strip.height >= strip.width else {
-            // No game files yet — fall back to a short procedural cycle.
+            // No game files yet — fall back to a short procedural cycle
+            // (already water-colored; no tint pass needed).
             let procedural = (0..<8).map { index -> CGImage in
                 let space = CGColorSpace(name: CGColorSpace.sRGB)!
                 let ctx = CGContext(
@@ -1264,22 +1269,46 @@ enum WaterRenderer {
             return procedural
         }
 
-        // The strip is N frames tall; slice it into 16×16 (or width×width) tiles.
+        // The strip is N frames tall; slice it into 16×16 (or width×width)
+        // tiles, subsample to a compact set, and tint each the way the game
+        // does — a multiply by the water color over the grayscale source.
         let size = strip.width
-        var frames: [CGImage] = []
+        var sliced: [CGImage] = []
         var y = 0
         while y + size <= strip.height {
             if let frame = strip.cropping(to: CGRect(x: 0, y: y, width: size, height: size)) {
-                frames.append(frame)
+                sliced.append(frame)
             }
             y += size
         }
-        if frames.isEmpty { frames = [strip] }
+        if sliced.isEmpty { sliced = [strip] }
+
+        // Cap the animation at ~8 frames, evenly sampled.
+        let stride = max(1, sliced.count / 8)
+        let sampled = stride == 1 ? sliced : (0..<8).compactMap { index in
+            sliced.indices.contains(index * stride) ? sliced[index * stride] : nil
+        }
+
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let tinted = sampled.map { frame -> CGImage in
+            let ctx = CGContext(
+                data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+                space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )!
+            ctx.interpolationQuality = .none
+            ctx.draw(frame, in: CGRect(x: 0, y: 0, width: size, height: size))
+            // The game tints its grayscale water by biome color; replicate it.
+            ctx.setBlendMode(.multiply)
+            ctx.setFillColor(red: waterTint.red, green: waterTint.green,
+                              blue: waterTint.blue, alpha: 1)
+            ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
+            return ctx.makeImage()!
+        }
 
         lock.lock()
-        framesCache = frames
+        framesCache = tinted
         lock.unlock()
-        return frames
+        return tinted
     }
 }
 
