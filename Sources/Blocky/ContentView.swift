@@ -873,7 +873,12 @@ enum OfficialTextures {
         case .endstone:   return "minecraft:block/end_stone.png"
         case .deepslate:  return "minecraft:block/deepslate.png"
         case .obsidian:   return "minecraft:block/obsidian.png"
-        case .water:      return "minecraft:block/water_still.png"
+        case .mossyCobblestone: return "minecraft:block/mossy_cobblestone.png"
+        case .sculk:     return "minecraft:block/sculk.png"
+        case .amethyst:  return "minecraft:block/amethyst_block.png"
+        case .tuff:      return "minecraft:block/tuff.png"
+        case .copper:     return "minecraft:block/copper_block.png"
+        case .darkOak:    return "minecraft:block/dark_oak_planks.png"
         }
     }
 
@@ -936,7 +941,12 @@ enum PixelBackgroundStyle: String, CaseIterable, Identifiable {
     case endstone
     case deepslate
     case obsidian
-    case water
+    case mossyCobblestone
+    case sculk
+    case amethyst
+    case tuff
+    case copper
+    case darkOak
 
     var id: String { rawValue }
 
@@ -953,7 +963,12 @@ enum PixelBackgroundStyle: String, CaseIterable, Identifiable {
         case .endstone:  return "End Stone"
         case .deepslate: return "Deepslate"
         case .obsidian:  return "Obsidian"
-        case .water:     return "Water · animated"
+        case .mossyCobblestone: return "Mossy Cobble"
+        case .sculk:     return "Sculk"
+        case .amethyst:  return "Amethyst"
+        case .tuff:      return "Tuff"
+        case .copper:     return "Copper"
+        case .darkOak:    return "Dark Oak"
         }
     }
 
@@ -972,7 +987,12 @@ enum PixelBackgroundStyle: String, CaseIterable, Identifiable {
         case .endstone:   return 0.32
         case .deepslate:  return 0.18
         case .obsidian:   return 0.15
-        case .water:      return 0.30
+        case .mossyCobblestone: return 0.26
+        case .sculk:     return 0.12
+        case .amethyst:  return 0.30
+        case .tuff:      return 0.24
+        case .copper:     return 0.26
+        case .darkOak:    return 0.24
         }
     }
 }
@@ -1122,7 +1142,6 @@ enum BackdropRenderer {
 
         switch style {
         case .frosted: return 0.5
-        case .water:   return 0.5   // handled by WaterRenderer, never drawn here
         case .grass:
             if ty <= 1 { return noise < 0.18 ? 0.5 : 0.85 }
             if ty == 2 { return seeded(blockSeed &+ tx &* 733) > 0.45 ? 0.7 : 0.55 }
@@ -1172,6 +1191,33 @@ enum BackdropRenderer {
             if streak && tx % 2 == 0 { return 0.5 }
             if noise < 0.1 { return 0.1 }
             return 0.28
+        case .mossyCobblestone:
+            let border = tx == 0 || ty == 0 || tx == texels - 1 || ty == texels - 1
+            if border { return 0.2 }
+            if noise < 0.28 { return 0.55 }                       // moss patches
+            return clustered(tx, ty) < 0.35 ? 0.36 : 0.60          // stone faces
+        case .sculk:
+            if noise > 0.93 { return 0.85 }                       // glow spots
+            if noise < 0.12 { return 0.18 }
+            return 0.45
+        case .amethyst:
+            let band = seeded((tx + ty) / 2 &+ blockSeed) < 0.4
+            if noise > 0.95 { return 0.85 }                       // sparkle
+            return band ? 0.40 : 0.62
+        case .tuff:
+            let c = clustered(tx, ty)
+            if c < 0.3 { return 0.24 }
+            if c > 0.78 { return 0.55 }
+            return 0.40
+        case .copper:
+            if noise < 0.15 { return 0.62 }                        // patina flecks
+            if noise > 0.92 { return 0.75 }
+            return 0.5
+        case .darkOak:
+            if ty == 0 { return 0.14 }
+            if seeded(blockSeed &+ tx &* 971) < 0.3 { return 0.28 }
+            if seeded(blockSeed) > 0.93 && (tx == 3 || tx == 4) && (ty == 3 || ty == 4) { return 0.24 }
+            return 0.42
         }
     }
 
@@ -1190,7 +1236,7 @@ enum BackdropRenderer {
         ]
         let index: Int
         switch style {
-        case .frosted, .grass, .water: index = 0
+        case .frosted, .grass: index = 0
         case .dirt: index = 1
         case .stone: index = 2
         case .cobblestone: index = 3
@@ -1200,6 +1246,12 @@ enum BackdropRenderer {
         case .endstone: index = 7
         case .deepslate: index = 8
         case .obsidian: index = 9
+        case .mossyCobblestone: index = 10
+        case .sculk: index = 11
+        case .amethyst: index = 12
+        case .tuff: index = 13
+        case .copper: index = 14
+        case .darkOak: index = 15
         }
         let ramp = ramps[index]
         let t = max(0.0, min(1.0, shade))
@@ -1215,124 +1267,16 @@ enum BackdropRenderer {
     }
 }
 
-// MARK: - Animated water (reads the game's real animated texture)
-
-/// Minecraft's water is an animated texture: `water_still.png` is a vertical
-/// STRIP of 16×16 frames. This reads it from the user's own game files
-/// (nothing bundled), splits it into frames, and tiles them at the game's
-/// tick rate — with a per-block phase so the surface waves across the window
-/// instead of pulsing in lockstep.
-enum WaterRenderer {
-    private static var framesCache: [CGImage]?
-    private static let lock = NSLock()
-
-    static let frameInterval: Double = 0.25   // 4 fps — gentle on the GPU stack
-
-    /// Minecraft's actual water tint (the game's grayscale water_still is
-    /// biome-tinted at runtime — this is that color).
-    private static let waterTint = (red: 63.0 / 255.0, green: 118.0 / 255.0, blue: 228.0 / 255.0)
-
-    static func frames(assetsDirectory: URL) -> [CGImage] {
-        lock.lock()
-        if let cached = framesCache {
-            lock.unlock()
-            return cached
-        }
-        lock.unlock()
-
-        guard let strip = OfficialTextures.texture(for: .water, assetsDirectory: assetsDirectory),
-              strip.width > 0, strip.height >= strip.width else {
-            // No game files yet — fall back to a short procedural cycle
-            // (already water-colored; no tint pass needed).
-            let procedural = (0..<8).map { index -> CGImage in
-                let space = CGColorSpace(name: CGColorSpace.sRGB)!
-                let ctx = CGContext(
-                    data: nil, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 0,
-                    space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                )!
-                let phase = Double(index) / 8
-                for ty in 0..<16 {
-                    for tx in 0..<16 {
-                        let wave = sin((Double(tx) / 16) * .pi * 2 + phase * .pi * 2) * 0.5 + 0.5
-                        let depth = sin((Double(ty) / 16) * .pi + phase * .pi * 2) * 0.5 + 0.5
-                        let blue = 0.45 + wave * 0.22 + depth * 0.08
-                        ctx.setFillColor(red: 0.09 + wave * 0.05, green: 0.28 + depth * 0.10,
-                                         blue: blue, alpha: 1)
-                        ctx.fill(CGRect(x: tx, y: ty, width: 1, height: 1))
-                    }
-                }
-                return ctx.makeImage()!
-            }
-            lock.lock()
-            framesCache = procedural
-            lock.unlock()
-            return procedural
-        }
-
-        // The strip is N frames tall; slice it into 16×16 (or width×width)
-        // tiles, subsample to a compact set, and tint each the way the game
-        // does — a multiply by the water color over the grayscale source.
-        let size = strip.width
-        var sliced: [CGImage] = []
-        var y = 0
-        while y + size <= strip.height {
-            if let frame = strip.cropping(to: CGRect(x: 0, y: y, width: size, height: size)) {
-                sliced.append(frame)
-            }
-            y += size
-        }
-        if sliced.isEmpty { sliced = [strip] }
-
-        // Cap the animation at ~8 frames, evenly sampled.
-        let stride = max(1, sliced.count / 8)
-        let sampled = stride == 1 ? sliced : (0..<8).compactMap { index in
-            sliced.indices.contains(index * stride) ? sliced[index * stride] : nil
-        }
-
-        let space = CGColorSpace(name: CGColorSpace.sRGB)!
-        let tinted = sampled.map { frame -> CGImage in
-            let ctx = CGContext(
-                data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
-                space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-            )!
-            ctx.interpolationQuality = .none
-            ctx.draw(frame, in: CGRect(x: 0, y: 0, width: size, height: size))
-            // The game tints its grayscale water by biome color; replicate it.
-            ctx.setBlendMode(.multiply)
-            ctx.setFillColor(red: waterTint.red, green: waterTint.green,
-                              blue: waterTint.blue, alpha: 1)
-            ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
-            return ctx.makeImage()!
-        }
-
-        lock.lock()
-        framesCache = tinted
-        lock.unlock()
-        return tinted
-    }
-}
-
 private struct PixelBackgroundView: View {
     let style: PixelBackgroundStyle
     @ObservedObject var fold: FoldState
     let assetsDirectory: URL
 
     var body: some View {
-        if style == .water {
-            // Animated water: ticks continuously at Minecraft's water pace,
-            // with per-block phase so the surface waves instead of pulsing.
-            TimelineView(.animation(minimumInterval: WaterRenderer.frameInterval)) { timeline in
-                Canvas { context, size in
-                    draw(context: context, size: size, time: timeline.date.timeIntervalSinceReferenceDate)
-                }
-            }
-            .overlay(vignette)
-        } else {
-            Canvas { context, size in
-                draw(context: context, size: size, time: 0)
-            }
-            .overlay(vignette)
+        Canvas { context, size in
+            draw(context: context, size: size)
         }
+        .overlay(vignette)
     }
 
     private var vignette: some View {
@@ -1345,64 +1289,8 @@ private struct PixelBackgroundView: View {
         .allowsHitTesting(false)
     }
 
-    private func draw(context: GraphicsContext, size: CGSize, time: Double) {
+    private func draw(context: GraphicsContext, size: CGSize) {
         guard style != .frosted else { return }
-
-        // Water renders straight from the animated frames — no static grid.
-        if style == .water {
-            let frames = WaterRenderer.frames(assetsDirectory: assetsDirectory)
-            guard !frames.isEmpty else { return }
-            let isAnimating = fold.isAnimating
-            let panelAlive = fold.isAnimating || fold.progress > 0.5
-            let block = BackdropRenderer.block
-            let columns = Int(size.width / block) + 1
-            let rows = Int(size.height / block) + 1
-
-            context.withCGContext { ctx in
-                ctx.interpolationQuality = .none
-                for row in 0..<rows {
-                    let blockY = CGFloat(row) * block
-                    guard blockY < size.height else { break }
-                    for column in 0..<columns {
-                        let blockX = CGFloat(column) * block
-                        guard blockX < size.width else { break }
-
-                        // Per-block phase: waves travel diagonally.
-                        let phase = Double(column + row)
-                        let index = Int((time / WaterRenderer.frameInterval + phase * 0.7)
-                            .truncatingRemainder(dividingBy: Double(frames.count)))
-                        let frame = frames[(index + frames.count) % frames.count]
-
-                        let inPanel = blockX >= ContentView.collapsedWidth
-                        var alpha: Double = 1
-                        if inPanel {
-                            if !isAnimating {
-                                alpha = panelAlive ? 1 : 0
-                            } else {
-                                let xNorm = max(0, min(1,
-                                    (blockX - ContentView.collapsedWidth) / ContentView.panelWidth))
-                                let blockSeed = column &* 73856093 &+ row &* 19349663
-                                let threshold = 0.02 + xNorm * 0.77
-                                    + seeded(blockSeed &+ 101) * 0.08
-                                alpha = max(0, min(1, (fold.progress - threshold) / 0.14))
-                            }
-                        }
-                        if alpha <= 0 { continue }
-
-                        let rect = CGRect(x: blockX, y: blockY, width: block, height: block)
-                        if alpha >= 1 {
-                            ctx.draw(frame, in: rect)
-                        } else {
-                            ctx.saveGState()
-                            ctx.setAlpha(alpha)
-                            ctx.draw(frame, in: rect)
-                            ctx.restoreGState()
-                        }
-                    }
-                }
-            }
-            return
-        }
 
         guard let (_, grid, mainStrip) = BackdropRenderer.cache(for: style, assetsDirectory: assetsDirectory)
         else { return }

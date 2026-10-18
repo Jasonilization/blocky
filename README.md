@@ -6,13 +6,15 @@ opensource minecraft launcher. enjoy!
 
 ![Blocky](screenshot.png)
 
-**backdrops** — frosted glass, Minecraft block textures read live from your own game files, or *animated water* straight from the game's own texture strip. Press a swatch to view full-size:
+**backdrops** — frosted glass, or Minecraft block textures read live from your own game files. Press a swatch to view full-size:
 
 | | | | |
 |:---:|:---:|:---:|:---:|
 | [![Frosted](docs/backdrops/thumbs/frosted.png)](docs/backdrops/frosted.png) | [![Grass](docs/backdrops/thumbs/grass.png)](docs/backdrops/grass.png) | [![Dirt](docs/backdrops/thumbs/dirt.png)](docs/backdrops/dirt.png) | [![Stone](docs/backdrops/thumbs/stone.png)](docs/backdrops/stone.png) |
-| [![Cobblestone](docs/backdrops/thumbs/cobblestone.png)](docs/backdrops/cobblestone.png) | [![Planks](docs/backdrops/thumbs/planks.png)](docs/backdrops/planks.png) | [![Sandstone](docs/backdrops/thumbs/sandstone.png)](docs/backdrops/sandstone.png) | [![Netherrack](docs/backdrops/thumbs/netherrack.png)](docs/backdrops/netherrack.png) |
-| [![End Stone](docs/backdrops/thumbs/endstone.png)](docs/backdrops/endstone.png) | [![Deepslate](docs/backdrops/thumbs/deepslate.png)](docs/backdrops/deepslate.png) | [![Obsidian](docs/backdrops/thumbs/obsidian.png)](docs/backdrops/obsidian.png) | [![Water · animated](docs/backdrops/thumbs/water.png)](docs/backdrops/water.png) |
+| [![Cobblestone](docs/backdrops/thumbs/cobblestone.png)](docs/backdrops/cobblestone.png) | [![Mossy Cobble](docs/backdrops/thumbs/mossyCobblestone.png)](docs/backdrops/mossyCobblestone.png) | [![Planks](docs/backdrops/thumbs/planks.png)](docs/backdrops/planks.png) | [![Dark Oak](docs/backdrops/thumbs/darkOak.png)](docs/backdrops/darkOak.png) |
+| [![Sandstone](docs/backdrops/thumbs/sandstone.png)](docs/backdrops/sandstone.png) | [![Netherrack](docs/backdrops/thumbs/netherrack.png)](docs/backdrops/netherrack.png) | [![End Stone](docs/backdrops/thumbs/endstone.png)](docs/backdrops/endstone.png) | [![Deepslate](docs/backdrops/thumbs/deepslate.png)](docs/backdrops/deepslate.png) |
+| [![Sculk](docs/backdrops/thumbs/sculk.png)](docs/backdrops/sculk.png) | [![Amethyst](docs/backdrops/thumbs/amethyst.png)](docs/backdrops/amethyst.png) | [![Tuff](docs/backdrops/thumbs/tuff.png)](docs/backdrops/tuff.png) | [![Copper](docs/backdrops/thumbs/copper.png)](docs/backdrops/copper.png) |
+| [![Obsidian](docs/backdrops/thumbs/obsidian.png)](docs/backdrops/obsidian.png) | | | |
 
 <details>
 <summary>see it move — the fold + the backdrop carousel</summary>
