@@ -1233,6 +1233,12 @@ enum BackdropRenderer {
             [0.48, 0.46, 0.30, 0.66, 0.63, 0.44, 0.82, 0.79, 0.60],
             [0.07, 0.07, 0.09, 0.15, 0.15, 0.18, 0.22, 0.22, 0.26],
             [0.04, 0.02, 0.09, 0.10, 0.05, 0.18, 0.20, 0.12, 0.34],
+            [0.18, 0.20, 0.16, 0.34, 0.40, 0.28, 0.50, 0.60, 0.38],
+            [0.04, 0.10, 0.12, 0.09, 0.20, 0.24, 0.16, 0.42, 0.46],
+            [0.24, 0.12, 0.40, 0.42, 0.24, 0.62, 0.62, 0.42, 0.85],
+            [0.16, 0.16, 0.16, 0.28, 0.28, 0.28, 0.42, 0.42, 0.42],
+            [0.38, 0.20, 0.12, 0.58, 0.32, 0.18, 0.80, 0.46, 0.28],
+            [0.14, 0.09, 0.05, 0.26, 0.17, 0.09, 0.40, 0.27, 0.15],
         ]
         let index: Int
         switch style {
@@ -1253,7 +1259,9 @@ enum BackdropRenderer {
         case .copper: index = 14
         case .darkOak: index = 15
         }
-        let ramp = ramps[index]
+        // Bounds-hardened: a missing ramp entry must never take the app
+        // down — fall back to the grass ramp instead.
+        let ramp = ramps.indices.contains(index) ? ramps[index] : ramps[0]
         let t = max(0.0, min(1.0, shade))
         let segment = t < 0.5 ? 0 : 1
         let local = t < 0.5 ? t * 2 : (t - 0.5) * 2
