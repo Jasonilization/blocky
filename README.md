@@ -6,15 +6,15 @@ opensource minecraft launcher. enjoy!
 
 ![Blocky](screenshot.png)
 
-**backdrops** — frosted glass, or Minecraft block textures read live from your own game files. Press a swatch to view full-size:
+**backdrops** — frosted glass, or Minecraft block textures extracted live from your own game's client jar — the actual in-game art, first frame of animated strips, biome-tinted grass crown included. Press a swatch to see the full window:
 
 | | | | |
 |:---:|:---:|:---:|:---:|
-| [![Frosted](docs/backdrops/thumbs/frosted.png)](docs/backdrops/frosted.png) | [![Grass](docs/backdrops/thumbs/grass.png)](docs/backdrops/grass.png) | [![Dirt](docs/backdrops/thumbs/dirt.png)](docs/backdrops/dirt.png) | [![Stone](docs/backdrops/thumbs/stone.png)](docs/backdrops/stone.png) |
-| [![Cobblestone](docs/backdrops/thumbs/cobblestone.png)](docs/backdrops/cobblestone.png) | [![Mossy Cobble](docs/backdrops/thumbs/mossyCobblestone.png)](docs/backdrops/mossyCobblestone.png) | [![Planks](docs/backdrops/thumbs/planks.png)](docs/backdrops/planks.png) | [![Dark Oak](docs/backdrops/thumbs/darkOak.png)](docs/backdrops/darkOak.png) |
-| [![Sandstone](docs/backdrops/thumbs/sandstone.png)](docs/backdrops/sandstone.png) | [![Netherrack](docs/backdrops/thumbs/netherrack.png)](docs/backdrops/netherrack.png) | [![End Stone](docs/backdrops/thumbs/endstone.png)](docs/backdrops/endstone.png) | [![Deepslate](docs/backdrops/thumbs/deepslate.png)](docs/backdrops/deepslate.png) |
-| [![Sculk](docs/backdrops/thumbs/sculk.png)](docs/backdrops/sculk.png) | [![Amethyst](docs/backdrops/thumbs/amethyst.png)](docs/backdrops/amethyst.png) | [![Tuff](docs/backdrops/thumbs/tuff.png)](docs/backdrops/tuff.png) | [![Copper](docs/backdrops/thumbs/copper.png)](docs/backdrops/copper.png) |
-| [![Obsidian](docs/backdrops/thumbs/obsidian.png)](docs/backdrops/obsidian.png) | | | |
+| [![Frosted](docs/backdrops/thumbs/frosted.png)](docs/backdrops/frosted.png) | [![Grass](docs/backdrops/tex/grass.png)](docs/backdrops/grass.png) | [![Dirt](docs/backdrops/tex/dirt.png)](docs/backdrops/dirt.png) | [![Stone](docs/backdrops/tex/stone.png)](docs/backdrops/stone.png) |
+| [![Cobblestone](docs/backdrops/tex/cobblestone.png)](docs/backdrops/cobblestone.png) | [![Mossy Cobble](docs/backdrops/tex/mossyCobblestone.png)](docs/backdrops/mossyCobblestone.png) | [![Oak Planks](docs/backdrops/tex/planks.png)](docs/backdrops/planks.png) | [![Dark Oak](docs/backdrops/tex/darkOak.png)](docs/backdrops/darkOak.png) |
+| [![Sandstone](docs/backdrops/tex/sandstone.png)](docs/backdrops/sandstone.png) | [![Netherrack](docs/backdrops/tex/netherrack.png)](docs/backdrops/netherrack.png) | [![End Stone](docs/backdrops/tex/endstone.png)](docs/backdrops/endstone.png) | [![Deepslate](docs/backdrops/tex/deepslate.png)](docs/backdrops/deepslate.png) |
+| [![Sculk](docs/backdrops/tex/sculk.png)](docs/backdrops/sculk.png) | [![Amethyst](docs/backdrops/tex/amethyst.png)](docs/backdrops/amethyst.png) | [![Tuff](docs/backdrops/tex/tuff.png)](docs/backdrops/tuff.png) | [![Copper](docs/backdrops/tex/copper.png)](docs/backdrops/copper.png) |
+| [![Obsidian](docs/backdrops/tex/obsidian.png)](docs/backdrops/obsidian.png) | | | |
 
 <details>
 <summary>see it move — the fold + the backdrop carousel</summary>

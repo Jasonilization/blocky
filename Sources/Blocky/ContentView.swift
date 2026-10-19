@@ -882,38 +882,139 @@ enum OfficialTextures {
         }
     }
 
-    /// Scans every asset index on disk for the requested texture.
+    /// Resolves a material's real texture. Primary source: the installed
+    /// version's client jar — modern asset indexes no longer carry block
+    /// textures; they live in the jar's assets/minecraft/textures tree.
+    /// (Legacy named-asset indexes stay as a secondary path.)
     static func texture(for style: PixelBackgroundStyle, assetsDirectory: URL) -> CGImage? {
         guard let key = textureKey(for: style) else { return nil }
         let cacheKey = key as NSString
         if let cached = cache.object(forKey: cacheKey) { return cached }
 
+        // Jar entry: "minecraft:block/cobblestone.png" →
+        // "assets/minecraft/textures/block/cobblestone.png"
+        let entry = "assets/minecraft/textures/" + key.replacingOccurrences(
+            of: "minecraft:", with: ""
+        )
+
+        let versionsDirectory = assetsDirectory
+            .deletingLastPathComponent()
+            .appendingPathComponent("versions", isDirectory: true)
         let fileManager = FileManager.default
-        let indexesDirectory = assetsDirectory.appendingPathComponent("indexes", isDirectory: true)
-        guard let indexes = try? fileManager.contentsOfDirectory(atPath: indexesDirectory.path) else {
-            return nil
+
+        var jars: [URL] = []
+        if let versionDirs = try? fileManager.contentsOfDirectory(
+            at: versionsDirectory, includingPropertiesForKeys: nil) {
+            jars = versionDirs
+                .filter { !$0.lastPathComponent.hasPrefix(".") }
+                .compactMap { dir in
+                    let jar = dir.appendingPathComponent(dir.lastPathComponent + ".jar")
+                    return fileManager.fileExists(atPath: jar.path) ? jar : nil
+                }
         }
 
-        for index in indexes.sorted().reversed() where index.hasSuffix(".json") {
-            let indexURL = indexesDirectory.appendingPathComponent(index)
-            guard let data = try? Data(contentsOf: indexURL),
-                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let objects = json["objects"] as? [String: [String: Any]],
-                  let entry = objects[key],
-                  let hash = entry["hash"] as? String,
-                  hash.count >= 2 else { continue }
-
-            let objectURL = assetsDirectory
-                .appendingPathComponent("objects", isDirectory: true)
-                .appendingPathComponent(String(hash.prefix(2)), isDirectory: true)
-                .appendingPathComponent(hash)
-
-            if let image = loadPNG(at: objectURL) {
+        for jar in jars {
+            if let data = extractJarEntry(named: entry, fromJar: jar),
+               var image = image(from: data) {
+                // Animated strips (e.g. sculk): use the first square frame.
+                if image.height > image.width {
+                    image = image.cropping(to: CGRect(x: 0, y: 0,
+                                                      width: image.width,
+                                                      height: image.width)) ?? image
+                }
+                // Grass sides ship with a gray crown; the game composites a
+                // biome-tinted overlay on top. Do the same.
+                if style == .grass {
+                    image = Self.compositedGrassSide(base: image, jar: jar) ?? image
+                }
                 cache.setObject(image, forKey: cacheKey)
                 return image
             }
         }
+
+        // Secondary: legacy named-asset indexes.
+        let indexesDirectory = assetsDirectory.appendingPathComponent("indexes", isDirectory: true)
+        if let indexes = try? fileManager.contentsOfDirectory(atPath: indexesDirectory.path) {
+            for index in indexes.sorted().reversed() where index.hasSuffix(".json") {
+                let indexURL = indexesDirectory.appendingPathComponent(index)
+                guard let data = try? Data(contentsOf: indexURL),
+                      let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let objects = json["objects"] as? [String: [String: Any]],
+                      let entry = objects[key],
+                      let hash = entry["hash"] as? String,
+                      hash.count >= 2 else { continue }
+
+                let objectURL = assetsDirectory
+                    .appendingPathComponent("objects", isDirectory: true)
+                    .appendingPathComponent(String(hash.prefix(2)), isDirectory: true)
+                    .appendingPathComponent(hash)
+
+                if let image = loadPNG(at: objectURL) {
+                    cache.setObject(image, forKey: cacheKey)
+                    return image
+                }
+            }
+        }
         return nil
+    }
+
+    /// `unzip -p` one entry's bytes out of a jar (jars are zip archives).
+    private static func extractJarEntry(named entry: String, fromJar jar: URL) -> Data? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        process.arguments = ["-p", jar.path, entry]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0, !data.isEmpty else { return nil }
+        return data
+    }
+
+    /// The game's grass-side: dirt + a gray crown, with a separate overlay
+    /// texture tinted by the biome's grass color and drawn on top.
+    private static func compositedGrassSide(base: CGImage, jar: URL) -> CGImage? {
+        guard let overlayData = extractJarEntry(
+                named: "assets/minecraft/textures/block/grass_block_side_overlay.png",
+                fromJar: jar),
+              let overlay = image(from: overlayData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+
+        let size = base.width
+
+        // Tint the overlay: overlay × biome green.
+        guard let tinted = CGContext(
+            data: nil, width: size, height: size, bitsPerComponent: 8,
+            bytesPerRow: 0, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        tinted.draw(overlay, in: CGRect(x: 0, y: 0, width: size, height: size))
+        tinted.setBlendMode(.multiply)
+        // 0x7CBD6B — the game's plains grass color.
+        tinted.setFillColor(red: 0x7C / 255.0, green: 0xBD / 255.0, blue: 0x6B / 255.0, alpha: 1)
+        tinted.fill(CGRect(x: 0, y: 0, width: size, height: size))
+        guard let tintImage = tinted.makeImage() else { return nil }
+
+        // Composite over the base side.
+        guard let composited = CGContext(
+            data: nil, width: size, height: size, bitsPerComponent: 8,
+            bytesPerRow: 0, space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        composited.draw(base, in: CGRect(x: 0, y: 0, width: size, height: size))
+        composited.draw(tintImage, in: CGRect(x: 0, y: 0, width: size, height: size))
+        return composited.makeImage()
+    }
+
+    private static func image(from data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
     }
 
     private static func loadPNG(at url: URL) -> CGImage? {
