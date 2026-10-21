@@ -6,7 +6,10 @@ opensource minecraft launcher. enjoy!
 
 ![Blocky](screenshot.png)
 
-**backdrops** — Minecraft block textures extracted live from your own game's client jar — the actual in-game art, first frame of animated strips, biome-tinted grass crown included. Press a swatch to see the full window:
+<details>
+<summary>backdrops — real block textures from your own game files</summary>
+
+Minecraft block textures extracted live from your game's client jar — the actual in-game art, first frame of animated strips, biome-tinted grass crown included. Press a swatch to see the full window:
 
 | | | | |
 |:---:|:---:|:---:|:---:|
@@ -14,6 +17,8 @@ opensource minecraft launcher. enjoy!
 | [![Mossy Cobble](docs/backdrops/tex/mossyCobblestone.png)](docs/backdrops/mossyCobblestone.png) | [![Oak Planks](docs/backdrops/tex/planks.png)](docs/backdrops/planks.png) | [![Dark Oak](docs/backdrops/tex/darkOak.png)](docs/backdrops/darkOak.png) | [![Sandstone](docs/backdrops/tex/sandstone.png)](docs/backdrops/sandstone.png) |
 | [![Netherrack](docs/backdrops/tex/netherrack.png)](docs/backdrops/netherrack.png) | [![End Stone](docs/backdrops/tex/endstone.png)](docs/backdrops/endstone.png) | [![Deepslate](docs/backdrops/tex/deepslate.png)](docs/backdrops/deepslate.png) | [![Sculk](docs/backdrops/tex/sculk.png)](docs/backdrops/sculk.png) |
 | [![Amethyst](docs/backdrops/tex/amethyst.png)](docs/backdrops/amethyst.png) | [![Tuff](docs/backdrops/tex/tuff.png)](docs/backdrops/tuff.png) | [![Copper](docs/backdrops/tex/copper.png)](docs/backdrops/copper.png) | [![Obsidian](docs/backdrops/tex/obsidian.png)](docs/backdrops/obsidian.png) |
+
+</details>
 
 <details>
 <summary>see it move — the fold + the backdrop carousel</summary>
