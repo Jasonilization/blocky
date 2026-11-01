@@ -116,34 +116,10 @@ struct ContentView: View {
             return AnyView(
                 ZStack(alignment: .topLeading) {
                     PixelBackgroundView(style: style, fold: fold, assetsDirectory: engine.assetsDirectory)
-                    // Readability scrim over the main column only — it fades
-                    // out exactly where the dissolvable panel begins, so the
-                    // expanding region stays genuinely clear.
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black.opacity(style.scrim), location: 0.0),
-                            .init(color: .black.opacity(style.scrim), location: 0.47),
-                            .init(color: .black.opacity(style.scrim / 2), location: 0.53),
-                            .init(color: .black.opacity(0), location: 0.60),
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    // Panel readability backing — rides the SAME fade as the
-                    // panel's text: the build-up stays raw and transparent,
-                    // and the darkening arrives only with the content.
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black.opacity(0.0), location: 0.0),
-                            .init(color: .black.opacity(0.42), location: 0.06),
-                            .init(color: .black.opacity(0.42), location: 1.0),
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(width: Self.panelWidth + 6, alignment: .leading)
-                    .offset(x: Self.collapsedWidth - 3)
-                    .opacity(fold.panelOpacity)
+                    // A light even wash so labels stay readable. The block art
+                    // stays the colour from the README swatch.
+                    Color.black.opacity(style.scrim * 0.45)
+                        .allowsHitTesting(false)
                 }
             )
         }
@@ -824,9 +800,8 @@ final class FoldState: ObservableObject {
         progress = expanded ? 1 : 0
     }
 
-    /// The panel UI's own opacity — one timing for the widgets AND their
-    /// readability scrim. Collapsing: text dies immediately; expanding:
-    /// the pixels build first, the text (and its backing) arrive last.
+    /// The panel UI's own opacity. Collapsing: text dies immediately;
+    /// expanding: the pixels build first, the text arrives last.
     var panelOpacity: Double {
         if !isAnimating {
             return progress > 0.5 ? 1 : 0
@@ -882,14 +857,18 @@ enum OfficialTextures {
         }
     }
 
-    /// Resolves a material's real texture. Primary source: the installed
-    /// version's client jar — modern asset indexes no longer carry block
-    /// textures; they live in the jar's assets/minecraft/textures tree.
-    /// (Legacy named-asset indexes stay as a secondary path.)
+    /// Resolves a material's real texture. First choice is the swatch shipped
+    /// in the README (`docs/backdrops/tex`), so the window matches that art.
+    /// The installed client jar is only a fallback.
     static func texture(for style: PixelBackgroundStyle, assetsDirectory: URL) -> CGImage? {
         guard let key = textureKey(for: style) else { return nil }
         let cacheKey = key as NSString
         if let cached = cache.object(forKey: cacheKey) { return cached }
+
+        if let shipped = readmeTexture(for: style) {
+            cache.setObject(shipped, forKey: cacheKey)
+            return shipped
+        }
 
         // Jar entry: "minecraft:block/cobblestone.png" →
         // "assets/minecraft/textures/block/cobblestone.png"
@@ -954,6 +933,24 @@ enum OfficialTextures {
                     return image
                 }
             }
+        }
+        return nil
+    }
+
+    /// The block swatches shown in the README. Same filenames as the style
+    /// raw values (`grass.png`, `darkOak.png`, …).
+    private static func readmeTexture(for style: PixelBackgroundStyle) -> CGImage? {
+        let file = style.rawValue + ".png"
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("docs/backdrops/tex/\(file)")
+        let bundled = Bundle.main.resourceURL?
+            .appendingPathComponent("backdrops/tex", isDirectory: true)
+            .appendingPathComponent(file)
+        for url in [bundled, repo].compactMap({ $0 }) {
+            if let image = loadPNG(at: url) { return image }
         }
         return nil
     }
@@ -1110,7 +1107,7 @@ enum BackdropRenderer {
 
     static let canvasWidth: CGFloat = 712
     static let canvasHeight: CGFloat = ContentView.fullWindowHeight   // 480 incl. titlebar bleed
-    static let block: CGFloat = 28
+    static let block: CGFloat = 64
 
     /// Renders the backdrop AND pre-slices its block grid in one pass, so
     /// folds never slice mid-animation (no first-fold hitch, no flash).
@@ -1184,18 +1181,10 @@ enum BackdropRenderer {
                 let blockY = CGFloat(row) * block
 
                 if let official {
-                    ctx.saveGState()
-                    let rotation = Double((blockSeed &+ 5) % 4) * .pi / 2
-                    if rotation != 0 {
-                        ctx.translateBy(x: blockX + block / 2, y: blockY + block / 2)
-                        ctx.rotate(by: CGFloat(rotation))
-                        ctx.translateBy(x: -block / 2, y: -block / 2)
-                    } else {
-                        ctx.translateBy(x: blockX, y: blockY)
-                    }
+                    // Exact 2:1 of the 128px README swatch, plus one pixel of
+                    // overlap so the tiles don't show a dark grout line.
                     ctx.interpolationQuality = .none
-                    ctx.draw(official, in: CGRect(x: 0, y: 0, width: block, height: block))
-                    ctx.restoreGState()
+                    ctx.draw(official, in: CGRect(x: blockX, y: blockY, width: block + 1, height: block + 1))
                     continue
                 }
 
@@ -1385,29 +1374,22 @@ private struct PixelBackgroundView: View {
         Canvas { context, size in
             draw(context: context, size: size)
         }
-        .overlay(vignette)
-    }
-
-    private var vignette: some View {
-        RadialGradient(
-            colors: [.black.opacity(0.0), .black.opacity(0.15)],
-            center: .center,
-            startRadius: 80,
-            endRadius: 560
-        )
-        .allowsHitTesting(false)
     }
 
     private func draw(context: GraphicsContext, size: CGSize) {
         guard style != .frosted else { return }
 
-        guard let (_, grid, mainStrip) = BackdropRenderer.cache(for: style, assetsDirectory: assetsDirectory)
+        guard let (fullImage, grid, mainStrip) = BackdropRenderer.cache(for: style, assetsDirectory: assetsDirectory)
         else { return }
 
         // One render path for idle AND fold states: the main strip plus
         // the panel's block grid. Settled states are just "all alphas
         // known" — so the instant a fold ends, the picture is bit-identical
         // to the last animation frame. No settle flash, ever.
+        //
+        // Settled frames draw the cached picture in one blit. Stretching the
+        // left strip to the canvas height and then stamping blocks beside it
+        // shifted the pattern at the join.
         let block = BackdropRenderer.block
         let mainColumns = Int((ContentView.collapsedWidth / block).rounded(.up)) + 1
 
@@ -1417,9 +1399,19 @@ private struct PixelBackgroundView: View {
         context.withCGContext { ctx in
             ctx.interpolationQuality = .none
 
-            // Main column strip — cached subimage, always alive.
-            let stripWidth = min(CGFloat(mainStrip.width), size.width)
-            ctx.draw(mainStrip, in: CGRect(x: 0, y: 0, width: stripWidth, height: size.height))
+            if !isAnimating {
+                let source = panelAlive ? fullImage : mainStrip
+                ctx.draw(source, in: CGRect(x: 0, y: 0, width: CGFloat(source.width), height: CGFloat(source.height)))
+                return
+            }
+
+            // Main column strip — cached subimage, always alive. Drawn at
+            // its own pixel size so the panel blocks land on the same grid.
+            ctx.draw(mainStrip, in: CGRect(
+                x: 0, y: 0,
+                width: CGFloat(mainStrip.width),
+                height: CGFloat(mainStrip.height)
+            ))
 
             // Panel blocks. Two passes: fully-opaque blocks draw with no
             // per-block state changes; only the fading band pays for

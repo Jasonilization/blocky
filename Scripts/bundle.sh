@@ -21,6 +21,10 @@ if [ -f "$ROOT_DIR/Resources/AppIcon.icns" ]; then
   cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
 
+# README block swatches — the art the backdrop tiles.
+mkdir -p "$APP_BUNDLE/Contents/Resources/backdrops/tex"
+cp "$ROOT_DIR/docs/backdrops/tex/"*.png "$APP_BUNDLE/Contents/Resources/backdrops/tex/"
+
 # Copy any SwiftPM resource bundles the target produced
 for bundle in "$BUILD_DIR"/*.bundle; do
   [ -d "$bundle" ] && cp -R "$bundle" "$APP_BUNDLE/Contents/Resources/"
