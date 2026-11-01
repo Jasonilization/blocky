@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0 — 2026-11-01
+
+### Added
+
+- Drag-to-Applications installer: `./Scripts/dmg.sh` builds `Blocky-<version>-macOS.dmg` with the app and an Applications shortcut laid out in Finder.
+- README showcase: the fold gif, the backdrop carousel, and pressable swatches.
+- Sixteen block backdrops, shipped in the app from the README swatches and tiled upright as one continuous picture. The installed client jar is only a fallback. Tiles are larger, with a light even wash and no vignette, so the block art stays the colour of the swatch.
+
+### Fixed
+
+- Backdrop shifted at the middle of the window: the left strip was stretched to the canvas height while the panel blocks were stamped on the unscaled grid.
+- Crash on a new material whose procedural palette was shorter than the style index.
+- DMG icon size and label size now live on the icon view options, so the Finder layout sticks.
+
+### Removed
+
+- Water backdrop. It shipped briefly and came back out; the set is the solid block faces.
+
 ## 1.0.0 — 2026-10-16
 
 First public release.
