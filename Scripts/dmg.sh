@@ -6,7 +6,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT_DIR/Blocky.app"
-VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || echo 1.0.0)"
+# The source plist, not the previously built app — that one is still the last version until bundle.sh runs.
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$ROOT_DIR/Resources/Info.plist" 2>/dev/null || echo 1.0.0)"
 STAGE="$ROOT_DIR/.build/dmg-stage"
 DMG="$ROOT_DIR/Blocky-$VERSION-macOS.dmg"
 
