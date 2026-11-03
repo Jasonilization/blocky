@@ -40,7 +40,20 @@ struct ContentView: View {
     @StateObject private var fold = FoldState()
 
     @StateObject private var engine = LauncherEngine()
+    @StateObject private var setupManager: SetupManager
+    @StateObject private var serverModel = ServerStatusModel()
     @FocusState private var usernameFieldFocused: Bool
+
+    @State private var showSetupWizard = false
+    @State private var showServersSheet = false
+
+    /// The setup manager shares this view's engine instance — one object
+    /// graph, one source of truth for versions and Java.
+    init() {
+        let engine = LauncherEngine()
+        _engine = StateObject(wrappedValue: engine)
+        _setupManager = StateObject(wrappedValue: SetupManager(engine: engine))
+    }
 
     static let collapsedWidth: CGFloat = 340
     static let panelWidth: CGFloat = 372
@@ -55,6 +68,9 @@ struct ContentView: View {
 
     /// Two-tap delete confirmation state for the versions list.
     @State private var pendingDeleteVersion: String?
+
+    /// Hover highlight for the near-invisible fold tab.
+    @State private var foldTabHovered = false
 
     private let cornerRadius: CGFloat = 13
 
@@ -102,6 +118,22 @@ struct ContentView: View {
         }
         .background(WindowConfigurator(expanded: $expanded, foldState: fold))
         .onAppear(perform: engine.bootstrap)
+        .onAppear {
+            // First run: walk the user through the machine check (folder,
+            // versions, Homebrew, Java). Everything else stays rerunnable
+            // from Settings.
+            if SetupManager.needsSetup {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    showSetupWizard = true
+                }
+            }
+        }
+        .sheet(isPresented: $showSetupWizard) {
+            SetupWizardView(manager: setupManager)
+        }
+        .sheet(isPresented: $showServersSheet) {
+            ServersSheet(model: serverModel)
+        }
     }
 
     // MARK: Background
@@ -132,24 +164,40 @@ struct ContentView: View {
         foldToggle
     }
 
+    /// The fold controls: a near-invisible drawer tab hugging the top-right
+    /// corner. Collapsed it is a `›` in accent colour; expanded a `‹` in
+    /// secondary grey — the only chrome on the window besides the wordmark,
+    /// yet with a full-size hit target and a tooltip so it is never a
+    /// mystery.
     private var foldToggle: some View {
         Button {
             // WindowConfigurator picks this up and drives the dissolve.
             expanded.toggle()
         } label: {
             Image(systemName: expanded ? "chevron.left" : "chevron.right")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(expanded ? Color.secondary : Color.accentColor)
-                .frame(width: 26, height: 26)
-                .background(Circle().fill(Color.primary.opacity(expanded ? 0.06 : 0.10)))
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1))
-                .contentShape(Circle())
+                .frame(width: 32, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(foldTabHovered ? 0.10 : 0.03))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(
+                                    Color.primary.opacity(foldTabHovered ? 0.22 : 0.10),
+                                    lineWidth: 1
+                                )
+                        )
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { hovering in
+            foldTabHovered = hovering
             if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }
-        .help(expanded ? "Dissolve the panel closed" : "Open settings & terminal")
+        .help(expanded ? "Fold the panel closed (collapse the window)"
+                       : "Open settings & terminal (expand the window)")
     }
 
     // MARK: Main column
@@ -167,6 +215,8 @@ struct ContentView: View {
                 .padding(.top, 14)
             launchButton
                 .padding(.top, 10)
+            ServerChips(model: serverModel) { showServersSheet = true }
+                .padding(.top, 14)
             Spacer(minLength: 24)
         }
         .padding(.horizontal, 26)
@@ -388,6 +438,18 @@ struct ContentView: View {
                     settingsRow(label: "SNAPSHOTS") { snapshotsToggle }
                     settingsRow(label: "GAME DIR") { gameDirField }
                     settingsRow(label: "FOLDERS") { folderButtons }
+                    settingsRow(label: "SETUP") {
+                        Button {
+                            showSetupWizard = true
+                        } label: {
+                            Label("Run setup wizard", systemImage: "wizard.and.hat")
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: 9.5, design: .monospaced))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help("Re-check Homebrew, Java, and the game folder")
+                    }
                 }
 
                 Divider().opacity(0.6)

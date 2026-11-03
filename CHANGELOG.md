@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Versions like 26.4-snapshot-6 and 1.21.11 could not run at all.** The classpath swept every jar under `libraries/` recursively, so a machine that had played several versions through several launchers (official, TLauncher, Blocky) put multiple LWJGL builds — 3.3.3, 3.4.1, 3.4.3 — plus three client jars and stale authlib/netty on one classpath, and LWJGL aborted every launch with "Incompatible Java and native library versions detected". The classpath is now exactly the selected version's manifest library list plus its client jar, the same thing the official launcher does; the full-tree sweep survives only as the fallback for folders without a manifest. Verified with real launches: 26.4-snapshot-6 at 82 jars and 1.21.11 at 72, zero LWJGL errors, both reaching "Setting user: Steve".
+
+### Added
+
+- First-run setup wizard: checks the game folder, installed versions, Homebrew and Java, and installs the two that break — Homebrew with a single administrator approval, then `openjdk@N` via brew — with every output line streamed into the launcher terminal. Rerunnable from Settings → Setup.
+- Recommended servers: a curated list (the big networks plus offline-friendly servers) with real Server List Pings — live player counts, latency, MOTD — and one-tap address copy.
+- Regression tests: classpath isolation against a mixed libraries tree, Java requirement inference per era, legacy argument surface, environment toolkit, server directory, and SLP response parsing.
+
+### Changed
+
+- The fold control is now a near-invisible drawer tab: a bare chevron `›` / `‹` with a full-size hit target, hover plate and tooltip, replacing the circled button.
+
 ## 1.1.0 — 2026-11-01
 
 ### Added

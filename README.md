@@ -2,6 +2,8 @@
 
 opensource minecraft launcher. enjoy!
 
+**First run walks you through it.** A setup wizard checks the four things a launch needs — game folder, installed versions, Homebrew, Java — and installs the two that commonly break: Homebrew (one administrator approval) and then `openjdk@N` through it. Every line of both installs streams into the launcher's own terminal, so nothing is mysterious. It never asks twice; rerun it any time from Settings → Setup.
+
 <img src="https://img.shields.io/badge/price-free-34C759?style=flat-square" alt="Free">
 
 ![Blocky](screenshot.png)
@@ -42,6 +44,21 @@ Minecraft block textures extracted live from your game's client jar — the actu
     open Blocky.app
 
 or build directly: `./Scripts/bundle.sh release` (Command Line Tools are enough — no Xcode needed). `./Scripts/dmg.sh` builds the drag-to-Applications installer.
+
+## recommended servers
+
+Every session Blocky launches is offline by design, so these are the servers built to accept it: the biggest public networks plus the cracked/offline-friendly homes. The launcher pings each one with real Minecraft Server List Ping packets — version label, live player counts, latency, MOTD — so you can see what's connectable before pasting an address into the game. Tap a chip or row to copy it, then Direct Connect.
+
+| Server | Address | What it is |
+| --- | --- | --- |
+| Hypixel | `mc.hypixel.net` | The largest network in the game |
+| MineBerry | `mc.mineberry.org` | Skyblock, Survival, Towny — plays offline |
+| Herobrine.org | `herobrine.org` | The classic cracked server |
+| BlocksMC | `blocksmc.com` | SkyBlock & EggWars, offline usernames |
+| CubeCraft | `play.cubecraft.net` | Java + Bedrock cross-play games |
+| ManaCube | `play.manacube.com` | SkyBlock, Prison, Parkour |
+| PvP Legacy | `play.pvplegacy.net` | Factions & competitive SkyBlock |
+| OPBlocks | `mc.opblocks.com` | OP survival and skyblock, offline friendly |
 
 ## what's inside
 

@@ -60,10 +60,10 @@ enum LaunchError: LocalizedError {
 
 /// Tiny synchronous wrapper around Process used only for fast probes
 /// (`/usr/libexec/java_home`, `java -version`, archive extraction).
-enum ShellRunner {
+public enum ShellRunner {
 
     /// Runs a binary and returns its combined output on exit code 0.
-    static func run(executablePath: String, arguments: [String] = []) -> String? {
+    public static func run(executablePath: String, arguments: [String] = []) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
@@ -644,12 +644,21 @@ public final class LauncherEngine: ObservableObject {
         return paths.sorted()
     }
 
-    /// Assembles the complete `-cp` argument: the version's exact resolved
-    /// dependencies first (so duplicate artifacts of other versions never
-    /// shadow them), then the recursive sweep of every jar in libraries/,
-    /// and finally the main game client jar. With an `inheritsFrom` chain
-    /// (mod loaders), both the child's and the base version's libraries are
-    /// already merged into `package`.
+    /// Assembles the complete `-cp` argument.
+    ///
+    /// With a package (the normal case): EXACTLY the manifest's library list,
+    /// resolved to maven paths, plus the client jar — one LWJGL version, one
+    /// netty, one authlib. Mixing in other versions' jars breaks the game at
+    /// runtime: two LWJGL builds on one classpath abort every launch with
+    /// "Incompatible Java and native library versions detected" (a machine
+    /// that plays several versions through several launchers — TLauncher,
+    /// official, Blocky — accumulates them all under the shared
+    /// libraries/ folder). The official launcher has always built the path
+    /// from the manifest alone, and so do we.
+    ///
+    /// Only when the package is unavailable (a bare hand-copied version folder
+    /// with no JSON) do we fall back to sweeping libraries/ — the game can't
+    /// tell us what it needs, so path order still puts the client jar last.
     func buildClasspath(clientJar: URL, package: VersionPackage?) throws -> String {
         let fileManager = FileManager.default
         var ordered: [String] = []
@@ -665,10 +674,10 @@ public final class LauncherEngine: ObservableObject {
             for request in MojangDownloader.libraryRequests(for: package) {
                 append(librariesDirectory.appendingPathComponent(request.path).path)
             }
-        }
-
-        for jarPath in Self.collectJarsRecursively(in: librariesDirectory) {
-            append(jarPath)
+        } else {
+            for jarPath in Self.collectJarsRecursively(in: librariesDirectory) {
+                append(jarPath)
+            }
         }
 
         guard fileManager.fileExists(atPath: clientJar.path) else {
@@ -732,7 +741,7 @@ public final class LauncherEngine: ObservableObject {
     /// The /usr/bin/java stub is deliberately excluded: probing it on a
     /// JVM-less machine triggers Apple's installer dialog, and every JVM it
     /// could reach is already visible via java_home or the glob below.
-    static func detectJavaInstallations() -> [JavaCandidate] {
+    public static func detectJavaInstallations() -> [JavaCandidate] {
         let fileManager = FileManager.default
         var seen = Set<String>()
         var binaries: [URL] = []
@@ -834,7 +843,7 @@ public final class LauncherEngine: ObservableObject {
 
     /// Version → required Java major, used when the version JSON carries no
     /// explicit javaVersion block.
-    static func heuristicJavaMajor(for versionID: String) -> Int {
+    public static func heuristicJavaMajor(for versionID: String) -> Int {
         let lowercased = versionID.lowercased()
         guard !lowercased.hasPrefix("b1"),
               !lowercased.hasPrefix("a1"),
