@@ -250,6 +250,12 @@ public final class LauncherEngine: ObservableObject {
     private static let selectedVersionKey = "blocky.selectedVersion"
     private static let remoteCatalogDisplayLimit = 40
 
+    /// The app's real version, read from the bundle so the string the game
+    /// reports (Minecraft's F3 / log header) can never drift from the app.
+    static let launcherVersion: String = {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+    }()
+
     public let minecraftRoot: URL
 
     var versionsDirectory: URL { minecraftRoot.appendingPathComponent("versions", isDirectory: true) }
@@ -1285,7 +1291,7 @@ public final class LauncherEngine: ObservableObject {
             "-Dlog4j2.formatMsgNoLookups=true",   // Log4Shell hard-stop (1.7–1.18)
             "-Xdock:name=Minecraft",              // keep the Dock honest
             "-Dminecraft.launcher.brand=blocky",
-            "-Dminecraft.launcher.version=1.0.0",
+            "-Dminecraft.launcher.version=\(Self.launcherVersion)",
         ]
 
         for flag in manifestFlags where !arguments.contains(flag) {
