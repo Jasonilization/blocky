@@ -222,6 +222,9 @@ struct ContentView: View {
                 .padding(.top, 10)
             ServerChips(model: serverModel) { address in
                 copyToast = address
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    copyToast = nil
+                }
             }
             .padding(.top, 14)
             Spacer(minLength: 24)
@@ -521,7 +524,7 @@ struct ContentView: View {
                     .frame(maxHeight: .infinity)
             } else {
                 terminalView
-                    .frame(maxHeight: 110)
+                    .frame(maxHeight: 20)
             }
 
             Divider().opacity(0.6)

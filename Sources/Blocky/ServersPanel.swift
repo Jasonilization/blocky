@@ -73,9 +73,11 @@ extension ServerStatus {
 // MARK: - Chips (main column)
 
 /// The main column's marquee: all recommended servers as scrollable tiles,
-/// each showing live player count, latency, and an obvious copy button.
+/// each showing live player count and latency. Tap any tile to copy its
+/// address — the whole tile bounces.
 struct ServerChips: View {
     @ObservedObject var model: ServerStatusModel
+    var copyToast: String? = nil
     var onCopy: (String) -> Void
 
     var body: some View {
@@ -88,7 +90,7 @@ struct ServerChips: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(ServerDirectory.recommended) { entry in
-                        tile(entry)
+                        tile(entry, bouncing: copyToast == entry.address)
                     }
                 }
                 .padding(.horizontal, 4)
@@ -97,7 +99,7 @@ struct ServerChips: View {
         }
     }
 
-    private func tile(_ entry: ServerEntry) -> some View {
+    private func tile(_ entry: ServerEntry, bouncing: Bool) -> some View {
         let status = model.status(for: entry)
         let online = status.playersOnline ?? 0
         let max = status.playersMax ?? 0
@@ -124,30 +126,9 @@ struct ServerChips: View {
                     .foregroundStyle(.secondary)
             }
 
-            VStack(spacing: 3) {
-                Text(latency)
-                    .font(.system(size: 8, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                Button {
-                    onCopy(entry.address)
-                } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(.white)
-                        Text("Copy")
-                            .font(.system(size: 7, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white)
-                    }
-                    .frame(width: 28, height: 28)
-                    .background(Color.accentColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .scaleEffect(1.1)
-                    .animation(.spring(response: 0.22, dampingFraction: 0.55), value: true)
-                }
-                .buttonStyle(.plain)
-                .help("Copy \(entry.address)")
-            }
+            Text(latency)
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
@@ -160,6 +141,13 @@ struct ServerChips: View {
                         .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
                 )
         )
+        .scaleEffect(bouncing ? 1.25 : 1.0)
+        .animation(.spring(response: 0.22, dampingFraction: 0.55), value: bouncing)
+        .onTapGesture {
+            model.copyAddress(entry)
+            onCopy(entry.address)
+        }
+        .help("Copy \(entry.address)")
     }
 }
 
