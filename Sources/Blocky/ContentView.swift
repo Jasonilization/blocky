@@ -522,9 +522,6 @@ struct ContentView: View {
                 // Terminal owns the whole panel when focused.
                 terminalView
                     .frame(maxHeight: .infinity)
-            } else {
-                terminalView
-                    .frame(maxHeight: 20)
             }
 
             Divider().opacity(0.6)
