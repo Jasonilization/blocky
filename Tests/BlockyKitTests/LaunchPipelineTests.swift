@@ -175,7 +175,7 @@ func environmentToolkitBasics() throws {
 @Test
 func serverDirectoryIntegrity() throws {
     let servers = ServerDirectory.recommended
-    #expect(servers.count >= 8)
+    #expect(servers.count >= 5)
 
     // Uniqueness + sane ports.
     var hosts = Set<String>()

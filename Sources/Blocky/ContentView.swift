@@ -33,8 +33,6 @@ struct ContentView: View {
     @AppStorage("blocky.showSnapshots") private var showSnapshots: Bool = true
     @AppStorage("blocky.customGameDir") private var customGameDir: String = ""
     @AppStorage("blocky.background") private var backgroundRaw: String = "frosted"
-    /// Terminal-focus mode: hide settings/versions, terminal takes the panel.
-    @AppStorage("blocky.terminalFocus") private var terminalFocus: Bool = false
 
     /// Transient fold-animation state — shared with the window driver.
     @StateObject private var fold = FoldState()
@@ -436,10 +434,7 @@ struct ContentView: View {
 
     private var rightPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Terminal-focus mode folds settings + versions away so the
-            // terminal owns the whole panel.
-            if !terminalFocus {
-                panelHeader("SETTINGS")
+            panelHeader("SETTINGS")
 
                 VStack(spacing: 6) {
                     settingsRow(label: "HEAP") { heapSlider }
@@ -482,49 +477,6 @@ struct ContentView: View {
                     }
 
                 Divider().opacity(0.6)
-            }
-
-            HStack(spacing: 14) {
-                panelHeader("TERMINAL")
-                Button("Clear") {
-                    engine.clearLog()
-                }
-                .buttonStyle(.link)
-                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                Button {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        terminalFocus.toggle()
-                    }
-                } label: {
-                    Image(systemName: terminalFocus
-                          ? "chevron.down"
-                          : "rectangle.expand.vertical")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(terminalFocus ? Color.white : Color.primary.opacity(0.55))
-                        .frame(width: 26, height: 22)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(terminalFocus
-                                      ? Color.accentColor.opacity(0.85)
-                                      : Color.primary.opacity(0.08))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                .help(terminalFocus ? "Bring settings back" : "Expand the terminal")
-            }
-            .padding(.bottom, 4)
-
-            if terminalFocus {
-                // Terminal owns the whole panel when focused.
-                terminalView
-                    .frame(maxHeight: .infinity)
-            }
-
-            Divider().opacity(0.6)
 
             creditsRow
         }
@@ -771,57 +723,6 @@ struct ContentView: View {
         .contentShape(Rectangle())
     }
 
-    // MARK: Terminal
-
-    private var terminalView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(engine.logLines) { line in
-                        Text(line.text)
-                            .font(.system(size: 9.5, design: .monospaced))
-                            .foregroundStyle(terminalColor(for: line.kind))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .id(line.id)
-                    }
-                }
-                .padding(10)
-            }
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.black.opacity(0.45))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-            )
-            .overlay {
-                if engine.logLines.isEmpty {
-                    Text("— waiting for launch —")
-                        .font(.system(size: 9.5, design: .monospaced))
-                        .foregroundStyle(.quaternary)
-                }
-            }
-            .onChange(of: engine.logLines.count) { _ in
-                if let last = engine.logLines.last {
-                    proxy.scrollTo(last.id, anchor: .bottom)
-                }
-            }
-        }
-        .frame(maxHeight: .infinity)
-    }
-
-    private func terminalColor(for kind: LogLine.Kind) -> Color {
-        switch kind {
-        case .out:    return Color.primary.opacity(0.85)
-        case .err:    return Color.red.opacity(0.9)
-        case .info:   return Color.secondary
-        case .system: return Color.accentColor
-        }
-    }
 
     // MARK: Credits
 
