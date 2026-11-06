@@ -3,9 +3,9 @@
 //  Blocky
 //
 //  PART 7 — Recommended multiplayer servers. Every row pings the real
-//  server over the Minecraft protocol, so what you see is proof it is
-//  connectable: version label, live player counts, latency, MOTD. Copy
-//  the address and paste it into Minecraft's Direct Connect.
+//  Minecraft protocol, so what you see is proof it is connectable: version
+//  label, live player counts, latency, MOTD. Copy the address and paste it
+//  into Minecraft's Direct Connect.
 //
 
 import SwiftUI
@@ -76,44 +76,24 @@ extension ServerStatus {
 /// each showing live player count, latency, and an obvious copy button.
 struct ServerChips: View {
     @ObservedObject var model: ServerStatusModel
-    @State private var copyToast: String? = nil
+    var onCopy: (String) -> Void
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("PLAY WITH FRIENDS")
-                    .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
-                    .kerning(1.8)
-                    .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("PLAY WITH FRIENDS")
+                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                .kerning(1.8)
+                .foregroundStyle(.tertiary)
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(ServerDirectory.recommended) { entry in
-                            tile(entry)
-                        }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(ServerDirectory.recommended) { entry in
+                        tile(entry)
                     }
-                    .padding(.horizontal, 4)
                 }
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 4)
             }
-
-            // Copy confirmation toast
-            if let copyToast {
-                Text("Copied \(copyToast)")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.accentColor.opacity(0.9))
-                    .clipShape(Capsule())
-                    .offset(y: -8)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                    .onAppear {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            self.copyToast = nil
-                        }
-                    }
-            }
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -149,8 +129,7 @@ struct ServerChips: View {
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundStyle(.tertiary)
                 Button {
-                    model.copyAddress(entry)
-                    copyToast = entry.address
+                    onCopy(entry.address)
                 } label: {
                     VStack(spacing: 2) {
                         Image(systemName: "doc.on.doc")
@@ -163,6 +142,8 @@ struct ServerChips: View {
                     .frame(width: 28, height: 28)
                     .background(Color.accentColor)
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .scaleEffect(1.1)
+                    .animation(.spring(response: 0.22, dampingFraction: 0.55), value: true)
                 }
                 .buttonStyle(.plain)
                 .help("Copy \(entry.address)")
