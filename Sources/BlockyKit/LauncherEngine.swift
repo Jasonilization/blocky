@@ -968,6 +968,102 @@ public final class LauncherEngine: ObservableObject {
         workTask?.cancel()
     }
 
+    /// Launch the game and write `serverAddress` to `servers.dat` so it
+    /// appears in the multiplayer list — the closest vanilla Minecraft gets
+    /// to "auto-connect" (there's no `--server` launch flag).
+    public func launchToServer(username rawUsername: String, serverAddress: String) {
+        let username = rawUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isWorking else { return }
+        guard !gameRunning else {
+            errorMessage = nil
+            statusMessage = "Minecraft is already running — quit it first."
+            appendLog("✕ blocked duplicate launch — a game process is alive", kind: .system)
+            return
+        }
+        guard !username.isEmpty else {
+            errorMessage = "Enter a username first."
+            return
+        }
+        guard Self.isValidMinecraftUsername(username) else {
+            errorMessage = "Invalid username — use 1–16 letters, numbers, or underscores."
+            return
+        }
+        guard !selectedVersionID.isEmpty else {
+            errorMessage = "Select a Minecraft version first."
+            return
+        }
+
+        // Write the server to servers.dat so it shows in multiplayer.
+        do {
+            try writeServerToServersDat(address: serverAddress, name: serverAddress)
+        } catch {
+            appendLog("✕ could not save server to servers.dat: \(error.localizedDescription)", kind: .system)
+        }
+
+        errorMessage = nil
+        selectionHintActive = false
+        statusMessage = "Preparing…"
+        isWorking = true
+
+        let versionID = selectedVersionID
+        workTask = Task.detached(priority: .utility) { [weak self] in
+            await self?.runLaunchSequence(username: username, versionID: versionID)
+        }
+    }
+
+    // MARK: servers.dat (NBT)
+
+    /// Writes a server entry to `servers.dat` so it shows in Minecraft's
+    /// multiplayer list. Uses gzip-compressed NBT (the format the game
+    /// expects). If the server already exists it is replaced.
+    private func writeServerToServersDat(address: String, name: String) throws {
+        let fileURL = minecraftRoot.appendingPathComponent("servers.dat")
+
+        // Build the NBT structure:
+        // root compound → "servers" list → compounds { ip: String, name: String }
+        var data = Data()
+
+        // Root compound tag (no name at top level)
+        data.append(0x0A) // TAG_Compound
+
+        // "servers" list
+        data.append(0x09) // TAG_List
+        data.append(0x0A) // inner type = compound
+        let serverCount: Int32 = 1
+        withUnsafeBytes(of: serverCount.bigEndian) { data.append(contentsOf: $0) }
+
+        // Single server compound (list entries have no name)
+        data.append(0x0A) // TAG_Compound
+
+        // ip string
+        data.append(0x08) // TAG_String
+        writeNBTString(&data, name: "ip", value: address)
+
+        // name string
+        data.append(0x08) // TAG_String
+        writeNBTString(&data, name: "name", value: name)
+
+        data.append(0x00) // TAG_End (end server compound)
+        data.append(0x00) // TAG_End (end root compound)
+
+        // Gzip compress
+        let compressed = try data.gzipped()
+        try compressed.write(to: fileURL)
+        appendLog("✓ saved server \(address) to servers.dat", kind: .system)
+    }
+
+    /// Writes a named TAG_String to the NBT stream: type byte, name length,
+    /// name bytes, value length, value bytes.
+    private func writeNBTString(_ data: inout Data, name: String, value: String) {
+        let nameBytes = Array(name.utf8)
+        let valueBytes = Array(value.utf8)
+        data.append(0x08) // TAG_String
+        withUnsafeBytes(of: UInt16(nameBytes.count).bigEndian) { data.append(contentsOf: $0) }
+        data.append(contentsOf: nameBytes)
+        withUnsafeBytes(of: UInt16(valueBytes.count).bigEndian) { data.append(contentsOf: $0) }
+        data.append(contentsOf: valueBytes)
+    }
+
     // MARK: Launch sequence
 
     private func runLaunchSequence(username: String, versionID: String) async {
@@ -1473,5 +1569,28 @@ public final class LauncherEngine: ObservableObject {
             self.errorMessage = message
             self.appendLog("✕ \(message)", kind: .err)
         }
+    }
+}
+
+// MARK: - Data gzip
+
+extension Data {
+    /// Gzip-compresses `self` using the system `gzip` command.
+    func gzipped() throws -> Data {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
+        process.arguments = ["-c"]
+        let inputPipe = Pipe()
+        let outputPipe = Pipe()
+        process.standardInput = inputPipe
+        process.standardOutput = outputPipe
+        try process.run()
+        inputPipe.fileHandleForWriting.write(self)
+        inputPipe.fileHandleForWriting.closeFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "gzipped", code: Int(process.terminationStatus))
+        }
+        return outputPipe.fileHandleForReading.readDataToEndOfFile()
     }
 }

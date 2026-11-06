@@ -44,7 +44,6 @@ struct ContentView: View {
 
     @State private var showSetupWizard = false
     @State private var showServersSheet = false
-    @State private var copyToast: String? = nil
 
     /// The setup manager shares this view's engine instance — one object
     /// graph, one source of truth for versions and Java.
@@ -131,7 +130,9 @@ struct ContentView: View {
             SetupWizardView(manager: setupManager)
         }
         .sheet(isPresented: $showServersSheet) {
-            ServersSheet(model: serverModel)
+            ServersSheet(model: serverModel) { address in
+                engine.launchToServer(username: username, serverAddress: address)
+            }
         }
         .onAppear {
             // Ping recommended servers immediately — no expansion needed.
@@ -218,11 +219,8 @@ struct ContentView: View {
                 .padding(.top, 14)
             launchButton
                 .padding(.top, 10)
-            ServerChips(model: serverModel, bouncedAddress: copyToast) { address in
-                copyToast = address
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    copyToast = nil
-                }
+            ServerChips(model: serverModel) { address in
+                engine.launchToServer(username: username, serverAddress: address)
             }
             .padding(.top, 14)
             Spacer(minLength: 24)
