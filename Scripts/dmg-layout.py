@@ -96,7 +96,7 @@ def main() -> int:
         }
 
         # Icon-view options: 96pt icons, 11pt labels, no auto-arrange, and
-        # the meadow background.
+        # the meadow background (backgroundType 2 = image alias).
         background = os.path.join(stage, ".background", "background.png")
         store["."]["icvp"] = {
             "viewOptionsVersion": 1,
