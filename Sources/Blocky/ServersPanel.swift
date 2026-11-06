@@ -77,7 +77,7 @@ extension ServerStatus {
 /// address — the whole tile bounces.
 struct ServerChips: View {
     @ObservedObject var model: ServerStatusModel
-    var copyToast: String? = nil
+    var bouncedAddress: String?
     var onCopy: (String) -> Void
 
     var body: some View {
@@ -90,7 +90,7 @@ struct ServerChips: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
                     ForEach(ServerDirectory.recommended) { entry in
-                        tile(entry, bouncing: copyToast == entry.address)
+                        tile(entry, bouncing: bouncedAddress == entry.address)
                     }
                 }
                 .padding(.horizontal, 4)

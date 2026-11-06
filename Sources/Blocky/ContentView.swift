@@ -220,7 +220,7 @@ struct ContentView: View {
                 .padding(.top, 14)
             launchButton
                 .padding(.top, 10)
-            ServerChips(model: serverModel) { address in
+            ServerChips(model: serverModel, bouncedAddress: copyToast) { address in
                 copyToast = address
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     copyToast = nil
