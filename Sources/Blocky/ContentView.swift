@@ -480,40 +480,12 @@ struct ContentView: View {
 
             HStack(spacing: 14) {
                 panelHeader("TERMINAL")
-                Spacer()
+                Spacer(minLength: 0)
                 Button("Clear") {
                     engine.clearLog()
                 }
                 .buttonStyle(.link)
                 .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-
-                // Expand-terminal toggle — only exists while the panel is
-                // open. When focused it fills with the accent color so the
-                // way back is impossible to miss.
-                Button {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        terminalFocus.toggle()
-                    }
-                } label: {
-                    Image(systemName: terminalFocus
-                          ? "chevron.down"
-                          : "rectangle.expand.vertical")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(terminalFocus ? Color.white : Color.primary.opacity(0.55))
-                        .frame(width: 26, height: 22)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(terminalFocus
-                                      ? Color.accentColor.opacity(0.85)
-                                      : Color.primary.opacity(0.08))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                .help(terminalFocus ? "Bring settings back" : "Expand the terminal")
             }
             .padding(.bottom, 4)
 
@@ -523,7 +495,7 @@ struct ContentView: View {
                     .frame(maxHeight: .infinity)
             } else {
                 terminalView
-                    .frame(minHeight: 120)
+                    .frame(maxHeight: 110)
             }
 
             Divider().opacity(0.6)

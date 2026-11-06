@@ -76,29 +76,43 @@ extension ServerStatus {
 /// each showing live player count, latency, and an obvious copy button.
 struct ServerChips: View {
     @ObservedObject var model: ServerStatusModel
+    @State private var copyToast: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
+        ZStack(alignment: .topTrailing) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("PLAY WITH FRIENDS")
                     .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                     .kerning(1.8)
                     .foregroundStyle(.tertiary)
-                Spacer()
-                Button("see all") { }
-                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.accentColor.opacity(0.9))
-                    .buttonStyle(.link)
-                    .opacity(0)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(ServerDirectory.recommended) { entry in
+                            tile(entry)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                }
+                .frame(maxWidth: .infinity)
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(ServerDirectory.recommended) { entry in
-                        tile(entry)
+            // Copy confirmation toast
+            if let copyToast {
+                Text("Copied \(copyToast)")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.accentColor.opacity(0.9))
+                    .clipShape(Capsule())
+                    .offset(y: -8)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                            self.copyToast = nil
+                        }
                     }
-                }
-                .padding(.horizontal, 4)
             }
         }
     }
@@ -130,19 +144,25 @@ struct ServerChips: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 4) {
+            VStack(spacing: 3) {
                 Text(latency)
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundStyle(.tertiary)
                 Button {
                     model.copyAddress(entry)
+                    copyToast = entry.address
                 } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 22, height: 22)
-                        .background(Color.accentColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    VStack(spacing: 2) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.white)
+                        Text("Copy")
+                            .font(.system(size: 7, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: 28, height: 28)
+                    .background(Color.accentColor)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .help("Copy \(entry.address)")

@@ -36,18 +36,10 @@ public struct ServerEntry: Identifiable, Hashable {
 
 public enum ServerDirectory {
 
-    /// A standing recommendation list. Java Edition, latest versions — what
-    /// an offline launcher's players actually look for: the biggest public
-    /// networks first, then the cracked/offline-friendly ones, which matter
-    /// doubly for a launcher whose sessions are offline by design.
+    /// A standing recommendation list. Offline-friendly / cracked servers
+    /// first — Blocky runs offline sessions, so premium-only networks would
+    /// just show "invalid session" and waste the user's time.
     public static let recommended: [ServerEntry] = [
-        ServerEntry(
-            name: "Hypixel",
-            host: "mc.hypixel.net",
-            port: 25565,
-            blurb: "The largest network in the game",
-            tags: ["Minigames", "BedWars", "SkyBlock"]
-        ),
         ServerEntry(
             name: "MineBerry",
             host: "mc.mineberry.org",
@@ -70,25 +62,11 @@ public enum ServerDirectory {
             tags: ["Cracked", "SkyBlock", "EggWars"]
         ),
         ServerEntry(
-            name: "CubeCraft",
-            host: "play.cubecraft.net",
-            port: 25565,
-            blurb: "Java + Bedrock cross-play games",
-            tags: ["Minigames", "Cross-play"]
-        ),
-        ServerEntry(
-            name: "ManaCube",
-            host: "play.manacube.com",
-            port: 25565,
-            blurb: "SkyBlock, Prison, Parkour",
-            tags: ["SkyBlock", "Prison"]
-        ),
-        ServerEntry(
             name: "PvP Legacy",
             host: "play.pvplegacy.net",
             port: 25565,
             blurb: "Factions & competitive SkyBlock",
-            tags: ["Factions", "SkyBlock"]
+            tags: ["Cracked", "Factions", "SkyBlock"]
         ),
         ServerEntry(
             name: "OPBlocks",
