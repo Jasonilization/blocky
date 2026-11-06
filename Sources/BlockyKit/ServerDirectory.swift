@@ -367,10 +367,9 @@ private struct ByteCursor {
     }
 
     mutating func bytes(_ count: Int) -> Data? {
-        guard count >= 0 else { return nil }
+        guard count >= 0, position + count <= data.endIndex else { return nil }
         let absoluteStart = start
         let absoluteEnd = data.index(absoluteStart, offsetBy: count)
-        guard absoluteEnd <= data.endIndex else { return nil }
         position += count
         return data[absoluteStart..<absoluteEnd]
     }

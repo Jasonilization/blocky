@@ -21,42 +21,12 @@ cp -R "$APP" "$STAGE/"
 ln -sfn /Applications "$STAGE/Applications"
 swift "$ROOT_DIR/Scripts/dmg-background.swift" "$STAGE/.background/background.png" "$ROOT_DIR/icon.png"
 
-# Icon layout + background via Finder. Best-effort: if automation permission
-# is missing we still ship a perfectly usable (if plainer) DMG.
-echo "==> Laying out the window"
-osascript <<APPLESCRIPT || echo "  (Finder layout skipped — no automation permission; DMG still works)"
-tell application "Finder"
-    set theDisk to (POSIX file "$STAGE") as alias
-    open theDisk
-    set theWindow to container window of theDisk
-    set current view of theWindow to icon view
-    tell icon view options of theWindow
-        set icon size to 96
-        set text size to 11
-        set arrangement to not arranged
-    end tell
-    set toolbar visible of theWindow to false
-    set statusbar visible of theWindow to false
-    set bounds of theWindow to {120, 120, 780, 520}
-    try
-        set background picture of theWindow to file ".background:background.png" of theDisk
-    end try
-    set position of item "Blocky.app" of theDisk to {165, 180}
-    set position of item "Applications" of theDisk to {495, 180}
-    close theWindow
-end tell
-APPLESCRIPT
-
-# Finder flushes .DS_Store asynchronously — imaging before it lands loses
-# the layout. Wait for it (or proceed plain after ~5 s).
-for _ in $(seq 1 10); do
-    if [ -f "$STAGE/.DS_Store" ]; then
-        echo "  layout persisted (.DS_Store present)"
-        break
-    fi
-    sleep 0.5
-done
-[ -f "$STAGE/.DS_Store" ] || echo "  (layout did not persist — DMG ships plain)"
+# Write the window layout straight into .DS_Store. Finder's AppleScript
+# `set background picture` is refused on current macOS (error -10006), so
+# the meadow background is applied here instead — same records, no
+# automation permission needed.
+echo "==> Writing DMG window layout"
+python3 "$ROOT_DIR/Scripts/dmg-layout.py" "$STAGE"
 
 echo "==> Creating $DMG"
 rm -f "$DMG"

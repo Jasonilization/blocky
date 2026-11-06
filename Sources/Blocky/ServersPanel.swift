@@ -72,12 +72,10 @@ extension ServerStatus {
 
 // MARK: - Chips (main column)
 
-/// The main column's compact preview: the top picks as chips.
+/// The main column's marquee: all recommended servers as scrollable tiles,
+/// each showing live player count, latency, and an obvious copy button.
 struct ServerChips: View {
     @ObservedObject var model: ServerStatusModel
-    let onSeeAll: () -> Void
-
-    private let picks = Array(ServerDirectory.recommended.prefix(3))
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -87,47 +85,80 @@ struct ServerChips: View {
                     .kerning(1.8)
                     .foregroundStyle(.tertiary)
                 Spacer()
-                Button("see all") { onSeeAll() }
+                Button("see all") { }
                     .font(.system(size: 8.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.accentColor.opacity(0.9))
                     .buttonStyle(.link)
+                    .opacity(0)
             }
 
-            HStack(spacing: 6) {
-                ForEach(picks) { entry in
-                    chip(entry)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(ServerDirectory.recommended) { entry in
+                        tile(entry)
+                    }
                 }
+                .padding(.horizontal, 4)
             }
         }
     }
 
-    private func chip(_ entry: ServerEntry) -> some View {
-        Button {
-            model.copyAddress(entry)
-        } label: {
+    private func tile(_ entry: ServerEntry) -> some View {
+        let status = model.status(for: entry)
+        let online = status.playersOnline ?? 0
+        let max = status.playersMax ?? 0
+        let latency = status.latencyMS.map { "\($0)ms" } ?? "—"
+
+        return VStack(spacing: 6) {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(model.status(for: entry).dotColor)
-                    .frame(width: 5, height: 5)
+                    .fill(status.dotColor)
+                    .frame(width: 6, height: 6)
                 Text(entry.name)
-                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            .padding(.horizontal, 8)
-            .frame(maxWidth: .infinity)
-            .frame(height: 26)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.primary.opacity(0.06))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-                    )
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            if status.state == .online, max > 0 {
+                Text("\(online)/\(max)")
+                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(status.summary)
+                    .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 4) {
+                Text(latency)
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                Button {
+                    model.copyAddress(entry)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 22)
+                        .background(Color.accentColor)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("Copy \(entry.address)")
+            }
         }
-        .buttonStyle(.plain)
-        .help("Copy \(entry.address) — paste it in Minecraft's Direct Connect")
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .frame(width: 150)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
+                )
+        )
     }
 }
 

@@ -134,6 +134,10 @@ struct ContentView: View {
         .sheet(isPresented: $showServersSheet) {
             ServersSheet(model: serverModel)
         }
+        .onAppear {
+            // Ping recommended servers immediately — no expansion needed.
+            serverModel.refreshAll()
+        }
     }
 
     // MARK: Background
@@ -215,7 +219,7 @@ struct ContentView: View {
                 .padding(.top, 14)
             launchButton
                 .padding(.top, 10)
-            ServerChips(model: serverModel) { showServersSheet = true }
+            ServerChips(model: serverModel)
                 .padding(.top, 14)
             Spacer(minLength: 24)
         }
@@ -462,6 +466,7 @@ struct ContentView: View {
                         .foregroundStyle(.quaternary)
                 }
                 versionsList
+                    .frame(minHeight: 44)
                     .task(id: pendingDeleteVersion) {
                         // Two-tap confirm: the first tap arms the trash, the
                         // second deletes. Arming expires after 2.5 s.
@@ -512,7 +517,14 @@ struct ContentView: View {
             }
             .padding(.bottom, 4)
 
-            terminalView
+            if terminalFocus {
+                // Terminal owns the whole panel when focused.
+                terminalView
+                    .frame(maxHeight: .infinity)
+            } else {
+                terminalView
+                    .frame(minHeight: 120)
+            }
 
             Divider().opacity(0.6)
 
@@ -521,7 +533,7 @@ struct ContentView: View {
         .padding(.top, 28)
         .padding(.bottom, 16)
         .padding(.horizontal, 18)
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(minHeight: Self.windowHeight, alignment: .top)
     }
 
     private func panelHeader(_ text: String) -> some View {
