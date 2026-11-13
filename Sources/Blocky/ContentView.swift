@@ -20,6 +20,7 @@
 
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import BlockyKit
 
 struct ContentView: View {
@@ -56,7 +57,7 @@ struct ContentView: View {
     static let collapsedWidth: CGFloat = 340
     static let panelWidth: CGFloat = 372
     static let expandedWidth: CGFloat = collapsedWidth + panelWidth
-    static let windowHeight: CGFloat = 452
+    static let windowHeight: CGFloat = 528
     /// The hidden titlebar's strip: window content is 480 pt tall, of which
     /// the top 28 is the (invisible) titlebar area over which the backdrop
     /// must bleed to cover the window edge-to-edge.
@@ -70,6 +71,10 @@ struct ContentView: View {
     /// Hover highlight for the near-invisible fold tab.
     @State private var foldTabHovered = false
 
+    /// Finder drops of mod jars and shader-pack zips.
+    @State private var dropHovering = false
+    @State private var dropNote: String?
+
     private let cornerRadius: CGFloat = 13
 
     var body: some View {
@@ -78,7 +83,11 @@ struct ContentView: View {
             // the top-trailing controls ride the live edge. Everything visual
             // is fixed-size — no layer anywhere scales with window resizes,
             // which is what makes the fold's boundary snaps pixel-clean.
+            // Hit testing stays off so empty glass drags the window.
             Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+            WindowDragger()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             mainColumn
@@ -114,6 +123,29 @@ struct ContentView: View {
                 .padding(.trailing, 12)
                 .padding(.top, 10)
         }
+        .overlay {
+            if dropHovering {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.14))
+                    )
+                    .overlay {
+                        Text("Drop a mod .jar or a shader pack .zip")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .blockyBox(10, scrim: 0.28, lift: 0.16)
+                    }
+                    .padding(14)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $dropHovering) { providers in
+            consumeDrop(providers)
+        }
         .background(WindowConfigurator(expanded: $expanded, foldState: fold))
         .onAppear(perform: engine.bootstrap)
         .onAppear {
@@ -130,8 +162,13 @@ struct ContentView: View {
             SetupWizardView(manager: setupManager)
         }
         .sheet(isPresented: $showServersSheet) {
-            ServersSheet(model: serverModel) { address in
-                engine.launchToServer(username: username, serverAddress: address)
+            ServersSheet(model: serverModel) { entry in
+                showServersSheet = false
+                engine.launchToServer(
+                    username: username,
+                    serverAddress: entry.address,
+                    serverName: entry.name
+                )
             }
         }
         .onAppear {
@@ -157,9 +194,10 @@ struct ContentView: View {
                     Color.black.opacity(style.scrim * 0.45)
                         .allowsHitTesting(false)
                 }
+                .allowsHitTesting(false)
             )
         }
-        return AnyView(Color.clear.background(.ultraThinMaterial))
+        return AnyView(Color.clear.background(.ultraThinMaterial).allowsHitTesting(false))
     }
 
     // MARK: Window controls (fold toggle + terminal quick-open)
@@ -182,17 +220,7 @@ struct ContentView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(expanded ? Color.secondary : Color.accentColor)
                 .frame(width: 32, height: 34)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.primary.opacity(foldTabHovered ? 0.10 : 0.03))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(
-                                    Color.primary.opacity(foldTabHovered ? 0.22 : 0.10),
-                                    lineWidth: 1
-                                )
-                        )
-                )
+                .blockyBox(8, scrim: 0.14, highlighted: foldTabHovered, lift: 0.22)
                 .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -208,29 +236,36 @@ struct ContentView: View {
 
     private var mainColumn: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 34)
+            Spacer(minLength: 16)
             header
-            Spacer(minLength: 26)
+            Spacer(minLength: 14)
             VStack(spacing: 12) {
                 usernameRow
                 versionRow
             }
+            .frame(maxWidth: .infinity)
             statusSlot
                 .padding(.top, 14)
             launchButton
                 .padding(.top, 10)
-            ServerChips(model: serverModel) { address in
-                engine.launchToServer(username: username, serverAddress: address)
-            }
+            ServerChips(model: serverModel, launchServer: { entry in
+                engine.launchToServer(
+                    username: username,
+                    serverAddress: entry.address,
+                    serverName: entry.name
+                )
+            }, showAll: {
+                showServersSheet = true
+            })
             .padding(.top, 14)
-            Spacer(minLength: 24)
+            Spacer(minLength: 16)
         }
         .padding(.horizontal, 26)
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private var header: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             Text("BLOCKY")
                 .font(.system(size: 27, weight: .heavy, design: .monospaced))
                 .kerning(5.5)
@@ -238,8 +273,11 @@ struct ContentView: View {
             Text("OFFLINE LAUNCHER")
                 .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                 .kerning(2.4)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .blockyBox(14, scrim: 0.22, lift: 0.18)
     }
 
     private var usernameRow: some View {
@@ -260,12 +298,52 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 50)
-        .background(fieldBackground(highlighted: usernameFieldFocused))
+        .blockyBox(cornerRadius, scrim: 0.14, highlighted: usernameFieldFocused, lift: 0.30)
     }
 
     private var versionRow: some View {
-        Menu {
-            Picker("Version", selection: $engine.selectedVersionID) {
+        versionChrome
+            .overlay {
+                Menu {
+                    versionMenuContent
+                } label: {
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .menuIndicator(.hidden)
+                .buttonStyle(.plain)
+                .disabled(engine.isWorking)
+            }
+    }
+
+    private var versionChrome: some View {
+        HStack(spacing: 11) {
+            Image(systemName: "shippingbox")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(Color.secondary.opacity(0.75))
+
+            Text(versionTitle)
+                .font(.system(size: 13.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer()
+
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity)
+        .frame(height: 50)
+        .blockyBox(cornerRadius, scrim: 0.14, lift: 0.30)
+    }
+
+    @ViewBuilder
+    private var versionMenuContent: some View {
+        Picker("Version", selection: $engine.selectedVersionID) {
                 Section("Installed") {
                     if engine.installedVersions.isEmpty {
                         Text("No local versions")
@@ -298,32 +376,6 @@ struct ContentView: View {
             } label: {
                 Label("Refresh versions", systemImage: "arrow.clockwise")
             }
-        } label: {
-            HStack(spacing: 11) {
-                Image(systemName: "shippingbox")
-                    .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(Color.secondary.opacity(0.75))
-
-                Text(versionTitle)
-                    .font(.system(size: 13.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                Spacer()
-
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 14)
-            .frame(height: 50)
-            .background(fieldBackground(highlighted: false))
-            .contentShape(Rectangle())
-        }
-        .menuIndicator(.hidden)
-        .frame(maxWidth: .infinity)
-        .disabled(engine.isWorking)
     }
 
     private var versionTitle: String {
@@ -356,6 +408,8 @@ struct ContentView: View {
                 }
             } else if showUsernameHint {
                 statusLabel("Username — 1–16 letters, numbers, or underscores", color: .red)
+            } else if let dropNote, !engine.isWorking {
+                statusLabel(dropNote, color: .secondary)
             } else if engine.gameRunning {
                 HStack(spacing: 6) {
                     Circle()
@@ -386,6 +440,10 @@ struct ContentView: View {
             .multilineTextAlignment(.center)
             .lineLimit(3)
             .minimumScaleFactor(0.8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: 280)
+            .blockyBox(8, scrim: 0.24, lift: 0.12)
             .animation(.easeInOut(duration: 0.2), value: text)
     }
 
@@ -412,10 +470,37 @@ struct ContentView: View {
             .frame(maxWidth: .infinity)
             .frame(height: 48)
             .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(canLaunch ? Color.accentColor : Color.accentColor.opacity(0.35))
+                ZStack {
+                    // Accent body, lifted at the top edge…
+                    LinearGradient(
+                        colors: [
+                            Color.accentColor.opacity(canLaunch ? 1 : 0.35),
+                            canLaunch ? Color.accentColor : Color.accentColor.opacity(0.35)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    // …with a glassy sheen riding the upper third.
+                    LinearGradient(
+                        colors: [.white.opacity(0.28), .white.opacity(0)],
+                        startPoint: .top,
+                        endPoint: .init(x: 0.5, y: 0.62)
+                    )
+                }
             )
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [.white.opacity(0.35), .white.opacity(0.06)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(color: Color.accentColor.opacity(canLaunch ? 0.45 : 0), radius: 12, x: 0, y: 4)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         }
         .buttonStyle(LaunchButtonStyle(enabled: canLaunch))
@@ -434,47 +519,49 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 10) {
             panelHeader("SETTINGS")
 
-                VStack(spacing: 6) {
-                    settingsRow(label: "HEAP") { heapSlider }
-                    settingsRow(label: "JAVA") { javaMenu }
-                    settingsRow(label: "BACKDROP") { backgroundMenu }
-                    settingsRow(label: "SNAPSHOTS") { snapshotsToggle }
-                    settingsRow(label: "GAME DIR") { gameDirField }
-                    settingsRow(label: "FOLDERS") { folderButtons }
-                    settingsRow(label: "SETUP") {
-                        Button {
-                            showSetupWizard = true
-                        } label: {
-                            Label("Run setup wizard", systemImage: "wizard.and.hat")
-                        }
-                        .buttonStyle(.link)
-                        .font(.system(size: 9.5, design: .monospaced))
-                        .foregroundStyle(Color.accentColor)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .help("Re-check Homebrew, Java, and the game folder")
+            // One glass substrate for the whole settings block: every row's
+            // text (HEAP slider, AUTO, folders, setup) finally has something
+            // behind it, so nothing sits raw on the block texels.
+            VStack(alignment: .leading, spacing: 6) {
+                settingsRow(label: "HEAP") { heapSlider }
+                settingsRow(label: "JAVA") { javaMenu }
+                settingsRow(label: "BACKDROP") { backgroundMenu }
+                settingsRow(label: "SNAPSHOTS") { snapshotsToggle }
+                settingsRow(label: "GAME DIR") { gameDirField }
+                settingsRow(label: "FOLDERS") { folderButtons }
+                settingsRow(label: "SETUP") {
+                    Button {
+                        showSetupWizard = true
+                    } label: {
+                        Label("Run setup wizard", systemImage: "wizard.and.hat")
                     }
+                    .buttonStyle(.link)
+                    .font(.system(size: 9.5, design: .monospaced))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .help("Re-check Homebrew, Java, and the game folder")
                 }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .blockyBox(12, scrim: 0.16, lift: 0.16)
 
-                Divider().opacity(0.6)
-
-                HStack(spacing: 8) {
-                    panelHeader("VERSIONS")
-                    Spacer()
-                    Text("own files · shared libraries not included")
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundStyle(.quaternary)
+            HStack(spacing: 8) {
+                panelHeader("VERSIONS")
+                Spacer()
+                Text("own files · shared libraries not included")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.quaternary)
+            }
+            versionsList
+                .frame(minHeight: 44)
+                .task(id: pendingDeleteVersion) {
+                    // Two-tap confirm: the first tap arms the trash, the
+                    // second deletes. Arming expires after 2.5 s.
+                    guard pendingDeleteVersion != nil else { return }
+                    try? await Task.sleep(for: .seconds(2.5))
+                    pendingDeleteVersion = nil
                 }
-                versionsList
-                    .frame(minHeight: 44)
-                    .task(id: pendingDeleteVersion) {
-                        // Two-tap confirm: the first tap arms the trash, the
-                        // second deletes. Arming expires after 2.5 s.
-                        guard pendingDeleteVersion != nil else { return }
-                        try? await Task.sleep(for: .seconds(2.5))
-                        pendingDeleteVersion = nil
-                    }
-
-                Divider().opacity(0.6)
 
             creditsRow
         }
@@ -489,6 +576,7 @@ struct ContentView: View {
             .font(.system(size: 9, weight: .semibold, design: .monospaced))
             .kerning(2)
             .foregroundStyle(.tertiary)
+            .legibleShadow()
     }
 
     private func settingsRow<Control: View>(label: String, @ViewBuilder control: () -> Control) -> some View {
@@ -500,6 +588,7 @@ struct ContentView: View {
                 .frame(width: 72, alignment: .leading)
             control()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 28)
     }
 
@@ -587,10 +676,13 @@ struct ContentView: View {
                             versionRow(versionID)
                         }
                     }
+                    .padding(3)
                 }
                 .frame(maxHeight: 88)
             }
         }
+        .padding(6)
+        .blockyBox(10, scrim: 0.14, lift: 0.14)
     }
 
     private func versionRow(_ versionID: String) -> some View {
@@ -628,9 +720,11 @@ struct ContentView: View {
         }
         .padding(.horizontal, 6)
         .frame(height: 22)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.red.opacity(armed ? 0.10 : 0))
+        .blockyBox(
+            6,
+            scrim: armed ? 0.16 : 0.08,
+            tint: armed ? Color.red.opacity(0.16) : nil,
+            lift: 0.14
         )
     }
 
@@ -663,14 +757,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 8)
         .frame(height: 26)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-                )
-        )
+        .blockyBox(8, scrim: 0.12, lift: 0.20)
     }
 
     /// One-tap access to the folders mods and shader packs live in.
@@ -693,7 +780,9 @@ struct ContentView: View {
                 .foregroundStyle(Color.accentColor)
         }
         .buttonStyle(.link)
-        .help("Open the \(name) folder — drop .jar mods / shader packs here")
+        .help(name == "mods"
+              ? "Open the mods folder — or drop a .jar anywhere on the window"
+              : "Open shader packs — or drop a .zip anywhere on the window")
     }
 
     private func settingsMenuLabel(_ text: String) -> some View {
@@ -708,17 +797,77 @@ struct ContentView: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 8)
-        .frame(height: 26)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-                )
-        )
+        .frame(height: 24)
+        .fixedSize(horizontal: true, vertical: false)
+        .blockyBox(8, scrim: 0.18, lift: 0.14)
         .contentShape(Rectangle())
+    }
+
+    /// Finder drop: `.jar` lands in `mods/`, `.zip` in `shaderpacks/`.
+    private func consumeDrop(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !fileProviders.isEmpty else { return false }
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var urls: [URL] = []
+        for provider in fileProviders {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+                let url: URL?
+                if let found = item as? URL {
+                    url = found
+                } else if let data = item as? Data {
+                    url = URL(dataRepresentation: data, relativeTo: nil)
+                } else {
+                    url = nil
+                }
+                guard let url else { return }
+                lock.lock()
+                urls.append(url)
+                lock.unlock()
+            }
+        }
+        group.notify(queue: .main) {
+            self.installDropped(urls)
+        }
+        return true
+    }
+
+    private func installDropped(_ urls: [URL]) {
+        guard !urls.isEmpty else {
+            dropNote = "That drop didn't include a file"
+            return
+        }
+        var notes: [String] = []
+        for url in urls {
+            let ext = url.pathExtension.lowercased()
+            let folder: String
+            switch ext {
+            case "jar":
+                folder = "mods"
+            case "zip":
+                folder = "shaderpacks"
+            default:
+                notes.append("\(url.lastPathComponent) isn't a .jar or .zip")
+                continue
+            }
+            let directory = engine.minecraftRoot.appendingPathComponent(folder, isDirectory: true)
+            let destination = directory.appendingPathComponent(url.lastPathComponent)
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.copyItem(at: url, to: destination)
+                notes.append("\(url.lastPathComponent) → \(folder)")
+            } catch {
+                notes.append("couldn't copy \(url.lastPathComponent)")
+            }
+        }
+        dropNote = notes.joined(separator: " · ")
     }
 
 
@@ -736,22 +885,85 @@ struct ContentView: View {
             Spacer()
             Text("MIT · made by Jason")
                 .font(.system(size: 8.5, design: .monospaced))
-                .foregroundStyle(.quaternary)
+                .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .blockyBox(8, scrim: 0.16, lift: 0.12)
     }
 
     // MARK: Shared shape
 
-    private func fieldBackground(highlighted: Bool) -> some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .fill(Color.primary.opacity(0.07))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(
-                        highlighted ? Color.accentColor.opacity(0.75) : Color.primary.opacity(0.12),
+}
+
+// MARK: - Shared box treatment
+
+/// One visual language for every box in Blocky.
+///
+/// Each box is a REAL blur of whatever backdrop sits behind it (block
+/// textures, the desktop), darkened with a scrim so text stays legible
+/// over the busiest texel, rim-lit top-to-bottom so it reads as glass, and
+/// lifted off the wallpaper with a soft shadow. Highlighted picks up an
+/// accent edge for focus.
+extension View {
+    func blockyBox(
+        _ radius: CGFloat = 10,
+        scrim: Double = 0.14,
+        highlighted: Bool = false,
+        tint: Color? = nil,
+        lift: Double = 0.26
+    ) -> some View {
+        modifier(BlockyBoxStyle(
+            radius: radius, scrim: scrim, highlighted: highlighted, tint: tint, lift: lift
+        ))
+    }
+}
+
+private struct BlockyBoxStyle: ViewModifier {
+    var radius: CGFloat
+    var scrim: Double
+    var highlighted: Bool
+    var tint: Color?
+    var lift: Double
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        content
+            .background(
+                ZStack {
+                    // Real blur of the backdrop behind the box…
+                    shape.fill(.thinMaterial)
+                    // …then a darkening wash so text never fights texels.
+                    shape.fill(Color.black.opacity(scrim))
+                    if let tint {
+                        shape.fill(tint)
+                    }
+                }
+            )
+            .clipShape(shape)
+            .overlay {
+                if highlighted {
+                    shape.strokeBorder(Color.accentColor.opacity(0.75), lineWidth: 1)
+                } else {
+                    // A sheen that falls off downward reads as a rim catch.
+                    shape.strokeBorder(
+                        LinearGradient(
+                            colors: [.white.opacity(0.22), .white.opacity(0.05)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
                         lineWidth: 1
                     )
-            )
+                }
+            }
+            .shadow(color: .black.opacity(lift), radius: radius * 0.55, x: 0, y: 2)
+    }
+}
+
+/// A soft halo so text sitting directly on busy block texels stays legible.
+extension View {
+    func legibleShadow() -> some View {
+        shadow(color: .black.opacity(0.55), radius: 3, x: 0, y: 1)
     }
 }
 
@@ -1472,6 +1684,21 @@ private struct LaunchButtonStyle: ButtonStyle {
     private func opacity(for configuration: Configuration) -> Double {
         if configuration.isPressed { return 0.85 }
         return (hovered && enabled) ? 0.88 : 1.0
+    }
+}
+
+/// Empty regions of the window drag it. Controls stacked above this view
+/// still receive their own clicks.
+private struct WindowDragger: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { DragView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class DragView: NSView {
+        override var mouseDownCanMoveWindow: Bool { true }
+
+        override func mouseDown(with event: NSEvent) {
+            window?.performDrag(with: event)
+        }
     }
 }
 

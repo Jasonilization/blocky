@@ -68,11 +68,11 @@ extension ServerStatus {
 // MARK: - Chips (main column)
 
 /// The main column's marquee: cracked-friendly servers as compact scrollable
-/// tiles. Tap any tile to launch straight into that server (the address is
-/// written to servers.dat so it shows in Minecraft's multiplayer list).
+/// tiles. Tap a tile and Minecraft joins that server as soon as it boots.
 struct ServerChips: View {
     @ObservedObject var model: ServerStatusModel
-    var launchServer: (String) -> Void
+    var launchServer: (ServerEntry) -> Void
+    var showAll: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -81,12 +81,12 @@ struct ServerChips: View {
                     .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
                     .kerning(1.8)
                     .foregroundStyle(.tertiary)
+                    .legibleShadow()
                 Spacer()
-                Button("see all") { }
+                Button("see all") { showAll() }
                     .font(.system(size: 8.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.accentColor.opacity(0.9))
                     .buttonStyle(.link)
-                    .opacity(0)
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -108,48 +108,41 @@ struct ServerChips: View {
         let latency = status.latencyMS.map { "\($0)ms" } ?? "—"
         let isOnline = status.state == .online
 
-        return VStack(spacing: 5) {
-            HStack(spacing: 4) {
+        return VStack(spacing: 3) {
+            HStack(spacing: 5) {
                 Circle()
                     .fill(status.dotColor)
-                    .frame(width: 5, height: 5)
+                    .frame(width: 6, height: 6)
                 Text(entry.name)
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .frame(maxWidth: 120, alignment: .leading)
             }
 
             if isOnline, max > 0 {
-                Text("\(online)/\(max)")
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                Text("\(online)/\(max) · \(latency)")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             } else {
                 Text(status.summary)
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-
-            Text(latency)
-                .font(.system(size: 7.5, design: .monospaced))
-                .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .frame(width: 125)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-                )
-        )
-        .scaleEffect(1.0)
+        .fixedSize(horizontal: true, vertical: true)
+        .frame(minWidth: 108)
+        .blockyBox(10, scrim: 0.20, lift: 0.16)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .animation(.spring(response: 0.22, dampingFraction: 0.55), value: status.state)
         .onTapGesture {
-            launchServer(entry.address)
+            launchServer(entry)
         }
-        .help("Launch \(entry.address)")
+        .help("Join \(entry.address) when Minecraft opens")
     }
 }
 
@@ -157,14 +150,30 @@ struct ServerChips: View {
 
 struct ServersSheet: View {
     @ObservedObject var model: ServerStatusModel
-    var launchServer: (String) -> Void
+    var launchServer: (ServerEntry) -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var customAddress = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("RECOMMENDED SERVERS")
+            Text("SERVERS")
                 .font(.system(size: 15, weight: .heavy, design: .monospaced))
                 .kerning(3)
+
+            HStack(spacing: 8) {
+                TextField("mc.example.org", text: $customAddress)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .padding(.horizontal, 10)
+                    .frame(height: 32)
+                    .blockyBox(8, scrim: 0.12, lift: 0.12)
+                    .onSubmit(joinTyped)
+                Button("Join") { joinTyped() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(Color.accentColor)
+                    .disabled(ServerDirectory.parseAddress(customAddress) == nil)
+            }
 
             ScrollView {
                 VStack(spacing: 8) {
@@ -175,19 +184,23 @@ struct ServersSheet: View {
             }
 
             HStack {
-                Text("Tap a server to launch into it")
+                Text("Minecraft joins the server as soon as it opens")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.tertiary)
                 Spacer()
                 Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .tint(Color.accentColor)
             }
         }
         .padding(22)
-        .frame(width: 460, height: 420)
+        .frame(width: 460, height: 460)
         .onAppear { model.refreshAll() }
+    }
+
+    private func joinTyped() {
+        guard let entry = ServerDirectory.parseAddress(customAddress) else { return }
+        launchServer(entry)
     }
 
     private func row(_ entry: ServerEntry) -> some View {
@@ -228,18 +241,11 @@ struct ServersSheet: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 1)
-                )
-        )
+        .blockyBox(10, scrim: 0.10, lift: 0.20)
         .contentShape(Rectangle())
         .onTapGesture {
-            launchServer(entry.address)
+            launchServer(entry)
         }
-        .help("Launch \(entry.address)")
+        .help("Join \(entry.address) when Minecraft opens")
     }
 }

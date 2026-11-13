@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0 — 2026-11-13
+
+### Added
+
+- Join a server as Minecraft boots. Tapping a recommended server, or typing an address, passes `--quickPlayMultiplayer` on 1.20 and newer, snapshots from 23w13a, and the 26.x line, including Fabric profile ids. The address is also saved to `servers.dat`.
+- Drop a `.jar` anywhere on the window to copy it into `mods/`. A `.zip` goes into `shaderpacks/`.
+- A server sheet with a type-an-address field. Join stays off until the address parses.
+
+### Fixed
+
+- `servers.dat` was not valid NBT and replaced the whole list with one broken entry. Blocky now upserts the chosen server and leaves the other rows in place. A file it cannot read is left untouched.
+- Glass behind the title, the status line, and the short settings labels hugs the text. The version picker is the same width as the username field.
+
 ## 1.2.0 — 2026-11-04
 
 ### Fixed

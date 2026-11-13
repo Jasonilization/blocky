@@ -206,6 +206,46 @@ func serverAddressParsing() throws {
     #expect(ServerDirectory.parseAddress(":25565") == nil)
 }
 
+@Test
+func quickPlayVersions() {
+    #expect(LauncherEngine.supportsQuickPlay("1.21.11"))
+    #expect(LauncherEngine.supportsQuickPlay("1.20"))
+    #expect(LauncherEngine.supportsQuickPlay("1.20.5"))
+    #expect(LauncherEngine.supportsQuickPlay("1.20-pre1"))
+    #expect(LauncherEngine.supportsQuickPlay("26.4-snapshot-6"))
+    #expect(LauncherEngine.supportsQuickPlay("26.1"))
+    #expect(LauncherEngine.supportsQuickPlay("23w13a"))
+    #expect(LauncherEngine.supportsQuickPlay("24w14a"))
+    #expect(LauncherEngine.supportsQuickPlay("fabric-loader-0.16.9-1.21.1"))
+    #expect(!LauncherEngine.supportsQuickPlay("1.19.4"))
+    #expect(!LauncherEngine.supportsQuickPlay("1.12.2"))
+    #expect(!LauncherEngine.supportsQuickPlay("1.8.9"))
+    #expect(!LauncherEngine.supportsQuickPlay("23w12a"))
+    #expect(!LauncherEngine.supportsQuickPlay("b1.7.3"))
+}
+
+@Test
+func serversDatRoundTrip() throws {
+    let mineberry = LauncherEngine.SavedServer(name: "MineBerry", ip: "mc.mineberry.org")
+    let payload = LauncherEngine.serversDatNBT(entries: [mineberry])
+    let parsed = try #require(LauncherEngine.parseServersDatNBT(payload))
+    #expect(parsed == [mineberry])
+
+    let withExtra = LauncherEngine.upsertServer(
+        LauncherEngine.SavedServer(name: "Example", ip: "example.com:25570"),
+        into: parsed
+    )
+    #expect(withExtra.map(\.ip) == ["example.com:25570", "mc.mineberry.org"])
+
+    let promoted = LauncherEngine.upsertServer(mineberry, into: withExtra)
+    #expect(promoted.map(\.ip) == ["mc.mineberry.org", "example.com:25570"])
+    #expect(promoted.count == 2)
+
+    let gzipped = try payload.gzipped()
+    let unzipped = try gzipped.gunzipped()
+    #expect(LauncherEngine.parseServersDatNBT(unzipped) == [mineberry])
+}
+
 // MARK: - SLP response parsing
 
 @Test

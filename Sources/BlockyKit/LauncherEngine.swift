@@ -929,6 +929,30 @@ public final class LauncherEngine: ObservableObject {
     // MARK: Launch entry point
 
     public func requestLaunch(username rawUsername: String) {
+        beginLaunch(username: rawUsername, server: nil)
+    }
+
+    public func cancelWork() {
+        workTask?.cancel()
+    }
+
+    /// Launch straight into `serverAddress`. Versions that know Quick Play
+    /// (1.20+, snapshots from 23w13a, and the 26.x line) get
+    /// `--quickPlayMultiplayer` and connect as the title screen appears.
+    /// The address is also upserted into `servers.dat` so it stays in the
+    /// multiplayer list when the version is too old to auto-join.
+    public func launchToServer(
+        username rawUsername: String,
+        serverAddress: String,
+        serverName: String? = nil
+    ) {
+        beginLaunch(
+            username: rawUsername,
+            server: (name: serverName ?? serverAddress, address: serverAddress)
+        )
+    }
+
+    private func beginLaunch(username rawUsername: String, server: (name: String, address: String)?) {
         let username = rawUsername.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isWorking else { return }
 
@@ -953,120 +977,296 @@ public final class LauncherEngine: ObservableObject {
             return
         }
 
-        errorMessage = nil
-        selectionHintActive = false
-        statusMessage = "Preparing…"
-        isWorking = true
-
-        let versionID = selectedVersionID
-        workTask = Task.detached(priority: .utility) { [weak self] in
-            await self?.runLaunchSequence(username: username, versionID: versionID)
-        }
-    }
-
-    public func cancelWork() {
-        workTask?.cancel()
-    }
-
-    /// Launch the game and write `serverAddress` to `servers.dat` so it
-    /// appears in the multiplayer list — the closest vanilla Minecraft gets
-    /// to "auto-connect" (there's no `--server` launch flag).
-    public func launchToServer(username rawUsername: String, serverAddress: String) {
-        let username = rawUsername.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isWorking else { return }
-        guard !gameRunning else {
-            errorMessage = nil
-            statusMessage = "Minecraft is already running — quit it first."
-            appendLog("✕ blocked duplicate launch — a game process is alive", kind: .system)
-            return
-        }
-        guard !username.isEmpty else {
-            errorMessage = "Enter a username first."
-            return
-        }
-        guard Self.isValidMinecraftUsername(username) else {
-            errorMessage = "Invalid username — use 1–16 letters, numbers, or underscores."
-            return
-        }
-        guard !selectedVersionID.isEmpty else {
-            errorMessage = "Select a Minecraft version first."
-            return
-        }
-
-        // Write the server to servers.dat so it shows in multiplayer.
-        do {
-            try writeServerToServersDat(address: serverAddress, name: serverAddress)
-        } catch {
-            appendLog("✕ could not save server to servers.dat: \(error.localizedDescription)", kind: .system)
+        if let server {
+            do {
+                try writeServerToServersDat(address: server.address, name: server.name)
+            } catch {
+                appendLog("✕ could not save server to servers.dat: \(error.localizedDescription)", kind: .system)
+            }
+            if Self.supportsQuickPlay(selectedVersionID) {
+                statusMessage = "Joining \(server.name) as soon as Minecraft opens"
+            } else {
+                statusMessage = "\(server.name) is in the server list — this version opens at the menu"
+            }
+        } else {
+            statusMessage = "Preparing…"
         }
 
         errorMessage = nil
         selectionHintActive = false
-        statusMessage = "Preparing…"
         isWorking = true
 
         let versionID = selectedVersionID
+        let quickPlayAddress = server?.address
         workTask = Task.detached(priority: .utility) { [weak self] in
-            await self?.runLaunchSequence(username: username, versionID: versionID)
+            await self?.runLaunchSequence(
+                username: username,
+                versionID: versionID,
+                quickPlayAddress: quickPlayAddress
+            )
+        }
+    }
+
+    // MARK: Quick Play
+
+    /// Vanilla learned `--quickPlayMultiplayer` in snapshot 23w13a (1.20).
+    /// Loader profile ids embed that game version (`fabric-loader-…-1.21.1`,
+    /// `…-26.1`), so the check looks inside the id, not only at its start.
+    public static func supportsQuickPlay(_ versionID: String) -> Bool {
+        let id = versionID.lowercased()
+        if tokenSupportsQuickPlay(id) { return true }
+        for token in regexMatches(#"\d{2}w\d{2}[a-z]?"#, in: id) where tokenSupportsQuickPlay(token) {
+            return true
+        }
+        for token in regexMatches(#"(?<![0-9])1\.\d+"#, in: id) where tokenSupportsQuickPlay(token) {
+            return true
+        }
+        for token in regexMatches(#"(?<![0-9])\d{2}\.\d+"#, in: id) where tokenSupportsQuickPlay(token) {
+            return true
+        }
+        return false
+    }
+
+    /// The version JSON itself lists the flag (feature-gated). That is the
+    /// ground truth when a profile id doesn't carry a readable version.
+    static func packageOffersQuickPlay(_ package: VersionPackage?) -> Bool {
+        guard let game = package?.arguments?.game else { return false }
+        for argument in game {
+            let values: [String]
+            switch argument {
+            case .literal(let value):
+                values = [value]
+            case .guarded(_, let many):
+                values = many
+            }
+            if values.contains(where: { $0.contains("quickPlayMultiplayer") }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func tokenSupportsQuickPlay(_ raw: String) -> Bool {
+        let id = raw.lowercased()
+        if let groups = firstRegexGroups(#"^(\d{2})w(\d{2})"#, in: id), groups.count == 2 {
+            let year = Int(groups[0]) ?? 0
+            let week = Int(groups[1]) ?? 0
+            if year > 23 { return true }
+            return year == 23 && week >= 13
+        }
+        let head = id.split(separator: ".").first.map(String.init) ?? id
+        if head.count == 2, let year = Int(head), year >= 24, id.contains(".") {
+            return true
+        }
+        if head == "1" {
+            let rest = id.split(separator: ".").dropFirst().first.map(String.init) ?? ""
+            let minor = Int(rest.prefix(while: { $0.isNumber })) ?? 0
+            return minor >= 20
+        }
+        return false
+    }
+
+    private static func regexMatches(_ pattern: String, in text: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            Range(match.range, in: text).map { String(text[$0]) }
+        }
+    }
+
+    private static func firstRegexGroups(_ pattern: String, in text: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              match.numberOfRanges > 1 else { return nil }
+        return (1..<match.numberOfRanges).compactMap { index in
+            Range(match.range(at: index), in: text).map { String(text[$0]) }
         }
     }
 
     // MARK: servers.dat (NBT)
 
-    /// Writes a server entry to `servers.dat` so it shows in Minecraft's
-    /// multiplayer list. Uses gzip-compressed NBT (the format the game
-    /// expects). If the server already exists it is replaced.
-    private func writeServerToServersDat(address: String, name: String) throws {
-        let fileURL = minecraftRoot.appendingPathComponent("servers.dat")
-
-        // Build the NBT structure:
-        // root compound → "servers" list → compounds { ip: String, name: String }
-        var data = Data()
-
-        // Root compound tag (no name at top level)
-        data.append(0x0A) // TAG_Compound
-
-        // "servers" list
-        data.append(0x09) // TAG_List
-        data.append(0x0A) // inner type = compound
-        let serverCount: Int32 = 1
-        withUnsafeBytes(of: serverCount.bigEndian) { data.append(contentsOf: $0) }
-
-        // Single server compound (list entries have no name)
-        data.append(0x0A) // TAG_Compound
-
-        // ip string
-        data.append(0x08) // TAG_String
-        writeNBTString(&data, name: "ip", value: address)
-
-        // name string
-        data.append(0x08) // TAG_String
-        writeNBTString(&data, name: "name", value: name)
-
-        data.append(0x00) // TAG_End (end server compound)
-        data.append(0x00) // TAG_End (end root compound)
-
-        // Gzip compress
-        let compressed = try data.gzipped()
-        try compressed.write(to: fileURL)
-        appendLog("✓ saved server \(address) to servers.dat", kind: .system)
+    struct SavedServer: Equatable {
+        var name: String
+        var ip: String
     }
 
-    /// Writes a named TAG_String to the NBT stream: type byte, name length,
-    /// name bytes, value length, value bytes.
-    private func writeNBTString(_ data: inout Data, name: String, value: String) {
-        let nameBytes = Array(name.utf8)
-        let valueBytes = Array(value.utf8)
-        data.append(0x08) // TAG_String
-        withUnsafeBytes(of: UInt16(nameBytes.count).bigEndian) { data.append(contentsOf: $0) }
-        data.append(contentsOf: nameBytes)
-        withUnsafeBytes(of: UInt16(valueBytes.count).bigEndian) { data.append(contentsOf: $0) }
-        data.append(contentsOf: valueBytes)
+    /// One server entry, moved to the top of the list. Matching addresses
+    /// are replaced so a repeat tap doesn't duplicate the row.
+    static func upsertServer(_ server: SavedServer, into list: [SavedServer]) -> [SavedServer] {
+        var rest = list.filter { $0.ip != server.ip }
+        rest.insert(server, at: 0)
+        return rest
+    }
+
+    /// Uncompressed NBT for `servers.dat`: an unnamed root compound holding
+    /// a list named `servers` of `{name, ip}` compounds.
+    static func serversDatNBT(entries: [SavedServer]) -> Data {
+        var data = Data()
+        data.append(0x0A)                         // TAG_Compound
+        appendU16(&data, 0)                       // unnamed root
+
+        data.append(0x09)                         // TAG_List
+        appendNBTString(&data, "servers")         // name
+        data.append(0x0A)                         // element type: compound
+        appendI32(&data, Int32(entries.count))
+
+        for entry in entries {
+            appendStringTag(&data, name: "name", value: entry.name)
+            appendStringTag(&data, name: "ip", value: entry.ip)
+            data.append(0x00)                     // end compound payload
+        }
+        data.append(0x00)                         // end root
+        return data
+    }
+
+    /// Reads the servers list back. Returns nil when the payload isn't a
+    /// servers.dat we understand, so a failed read never overwrites the file.
+    static func parseServersDatNBT(_ data: Data) -> [SavedServer]? {
+        var reader = NBTReader(bytes: [UInt8](data))
+        guard reader.u8() == 0x0A, reader.string() != nil else { return nil }
+        var found: [SavedServer]?
+        while let tag = reader.u8(), tag != 0x00 {
+            guard let name = reader.string() else { return nil }
+            if tag == 0x09, name == "servers" {
+                guard reader.u8() == 0x0A, let count = reader.i32(), count >= 0, count < 10_000 else {
+                    return nil
+                }
+                var servers: [SavedServer] = []
+                for _ in 0..<count {
+                    var serverName = ""
+                    var ip = ""
+                    while let field = reader.u8(), field != 0x00 {
+                        guard let fieldName = reader.string() else { return nil }
+                        switch field {
+                        case 0x08:
+                            guard let value = reader.string() else { return nil }
+                            if fieldName == "name" { serverName = value }
+                            if fieldName == "ip" { ip = value }
+                        default:
+                            guard reader.skip(tag: field) else { return nil }
+                        }
+                    }
+                    if !ip.isEmpty {
+                        servers.append(SavedServer(name: serverName.isEmpty ? ip : serverName, ip: ip))
+                    }
+                }
+                found = servers
+            } else if !reader.skip(tag: tag) {
+                return nil
+            }
+        }
+        return found
+    }
+
+    /// Writes a server entry to `servers.dat` (gzip NBT). Existing rows stay;
+    /// the chosen server moves to the top. A file we can't parse is left
+    /// untouched.
+    private func writeServerToServersDat(address: String, name: String) throws {
+        let fileURL = minecraftRoot.appendingPathComponent("servers.dat")
+        var existing: [SavedServer] = []
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            let raw = try Data(contentsOf: fileURL)
+            let nbt = (try? raw.gunzipped()) ?? raw
+            guard let parsed = Self.parseServersDatNBT(nbt) else {
+                throw NSError(
+                    domain: "blocky.servers",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "servers.dat is in a format Blocky couldn't read, so it was left as-is"]
+                )
+            }
+            existing = parsed
+        }
+        let updated = Self.upsertServer(SavedServer(name: name, ip: address), into: existing)
+        let compressed = try Self.serversDatNBT(entries: updated).gzipped()
+        try compressed.write(to: fileURL, options: .atomic)
+        appendLog("✓ saved server \(name) (\(address)) to servers.dat", kind: .system)
+    }
+
+    private static func appendStringTag(_ data: inout Data, name: String, value: String) {
+        data.append(0x08)
+        appendNBTString(&data, name)
+        appendNBTString(&data, value)
+    }
+
+    private static func appendNBTString(_ data: inout Data, _ value: String) {
+        let bytes = Array(value.utf8)
+        appendU16(&data, UInt16(bytes.count))
+        data.append(contentsOf: bytes)
+    }
+
+    private static func appendU16(_ data: inout Data, _ value: UInt16) {
+        var big = value.bigEndian
+        withUnsafeBytes(of: &big) { data.append(contentsOf: $0) }
+    }
+
+    private static func appendI32(_ data: inout Data, _ value: Int32) {
+        var big = value.bigEndian
+        withUnsafeBytes(of: &big) { data.append(contentsOf: $0) }
+    }
+
+    private struct NBTReader {
+        let bytes: [UInt8]
+        var index = 0
+
+        mutating func u8() -> UInt8? {
+            guard index < bytes.count else { return nil }
+            let value = bytes[index]
+            index += 1
+            return value
+        }
+
+        mutating func i32() -> Int? {
+            guard index + 4 <= bytes.count else { return nil }
+            let raw = UInt32(bytes[index]) << 24
+                | UInt32(bytes[index + 1]) << 16
+                | UInt32(bytes[index + 2]) << 8
+                | UInt32(bytes[index + 3])
+            index += 4
+            return Int(Int32(bitPattern: raw))
+        }
+
+        mutating func string() -> String? {
+            guard index + 2 <= bytes.count else { return nil }
+            let length = Int(bytes[index]) << 8 | Int(bytes[index + 1])
+            index += 2
+            guard length >= 0, index + length <= bytes.count else { return nil }
+            let slice = bytes[index..<(index + length)]
+            index += length
+            return String(bytes: slice, encoding: .utf8)
+        }
+
+        mutating func skip(tag: UInt8) -> Bool {
+            switch tag {
+            case 0x01: return skipBytes(1)
+            case 0x02: return skipBytes(2)
+            case 0x03, 0x05: return skipBytes(4)
+            case 0x04, 0x06: return skipBytes(8)
+            case 0x07:
+                guard let count = i32(), count >= 0 else { return false }
+                return skipBytes(count)
+            case 0x08:
+                return string() != nil
+            case 0x0B:
+                guard let count = i32(), count >= 0 else { return false }
+                return skipBytes(count * 4)
+            case 0x0C:
+                guard let count = i32(), count >= 0 else { return false }
+                return skipBytes(count * 8)
+            default:
+                return false
+            }
+        }
+
+        private mutating func skipBytes(_ count: Int) -> Bool {
+            guard count >= 0, index + count <= bytes.count else { return false }
+            index += count
+            return true
+        }
     }
 
     // MARK: Launch sequence
 
-    private func runLaunchSequence(username: String, versionID: String) async {
+    private func runLaunchSequence(username: String, versionID: String, quickPlayAddress: String? = nil) async {
         do {
             try Task.checkCancellation()
 
@@ -1136,16 +1336,28 @@ public final class LauncherEngine: ObservableObject {
             )
 
             // ── Phase 7: spawn
+            let autoJoin = quickPlayAddress.flatMap { address -> String? in
+                let supported = Self.supportsQuickPlay(versionID)
+                    || Self.packageOffersQuickPlay(resolved?.package)
+                return supported ? address : nil
+            }
             try await spawn(
                 username: username,
                 versionID: versionID,
                 java: java,
                 classpath: classpath,
                 nativesDirectory: natives,
-                package: resolved?.package
+                package: resolved?.package,
+                quickPlayAddress: autoJoin
             )
 
-            complete(status: "Minecraft is running — logs stream to this console.")
+            if let autoJoin {
+                complete(status: "Minecraft is joining \(autoJoin)")
+            } else if let quickPlayAddress {
+                complete(status: "Minecraft is running — join \(quickPlayAddress) from the server list")
+            } else {
+                complete(status: "Minecraft is running — logs stream to this console.")
+            }
             await reloadInstalledVersions()
 
         } catch is CancellationError {
@@ -1343,7 +1555,8 @@ public final class LauncherEngine: ObservableObject {
         java: JavaCandidate,
         classpath: String,
         nativesDirectory: URL?,
-        package: VersionPackage?
+        package: VersionPackage?,
+        quickPlayAddress: String? = nil
     ) async throws {
         let fileManager = FileManager.default
 
@@ -1427,6 +1640,10 @@ public final class LauncherEngine: ObservableObject {
         ])
         if legacyFlags.includesUserProperties {
             arguments.append(contentsOf: ["--userProperties", "{}"])
+        }
+        if let quickPlayAddress {
+            arguments.append(contentsOf: ["--quickPlayMultiplayer", quickPlayAddress])
+            enqueueLog("✓ --quickPlayMultiplayer \(quickPlayAddress)", kind: .system)
         }
 
         print("[Blocky] ▸ \(java.binary.path) \(arguments.joined(separator: " "))")
@@ -1590,6 +1807,27 @@ extension Data {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw NSError(domain: "gzipped", code: Int(process.terminationStatus))
+        }
+        return outputPipe.fileHandleForReading.readDataToEndOfFile()
+    }
+
+    /// Gzip-decompresses `self`. Used to read an existing `servers.dat`
+    /// before upserting a row.
+    func gunzipped() throws -> Data {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
+        process.arguments = ["-dc"]
+        let inputPipe = Pipe()
+        let outputPipe = Pipe()
+        process.standardInput = inputPipe
+        process.standardOutput = outputPipe
+        process.standardError = Pipe()
+        try process.run()
+        inputPipe.fileHandleForWriting.write(self)
+        inputPipe.fileHandleForWriting.closeFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw NSError(domain: "gunzipped", code: Int(process.terminationStatus))
         }
         return outputPipe.fileHandleForReading.readDataToEndOfFile()
     }

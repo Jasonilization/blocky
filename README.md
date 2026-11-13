@@ -1,17 +1,21 @@
 # Blocky
 
-opensource minecraft launcher. enjoy!
+opensource minecraft launcher for mac. one window, no account, offline.
 
-**First run walks you through it.** A setup wizard checks the four things a launch needs — game folder, installed versions, Homebrew, Java — and installs the two that commonly break: Homebrew (one administrator approval) and then `openjdk@N` through it. Every line of both installs streams into the launcher's own terminal, so nothing is mysterious. It never asks twice; rerun it any time from Settings → Setup.
+**[Blocky 1.3.0](https://github.com/Jasonilization/blocky/releases/tag/v1.3.0)** — download `Blocky-1.3.0-macOS.dmg`, open it, drag Blocky to Applications. First launch is right-click → Open. The build is ad-hoc signed, not notarized. macOS 13+.
+
+The first run checks the game folder, your versions, Homebrew, and Java, and installs the two that usually break: Homebrew (one administrator approval) and `openjdk@N`. Rerun it any time from Settings → Setup.
+
+Tap a server and the game joins it as soon as it opens, on 1.20 and newer (including 26.x). Drop a `.jar` on the window and it lands in `mods/`. A `.zip` lands in `shaderpacks/`.
 
 <img src="https://img.shields.io/badge/price-free-34C759?style=flat-square" alt="Free">
 
 ![Blocky](screenshot.png)
 
 <details>
-<summary>backdrops — real block textures from your own game files</summary>
+<summary>backdrops — the block faces the window tiles</summary>
 
-Minecraft block textures extracted live from your game's client jar — the actual in-game art, first frame of animated strips, biome-tinted grass crown included. Press a swatch to see the full window:
+Sixteen faces, the same art as the swatches below, tiled upright across the whole window. Press a swatch to see it full size:
 
 | | | | |
 |:---:|:---:|:---:|:---:|
@@ -27,7 +31,7 @@ Minecraft block textures extracted live from your game's client jar — the actu
 
 ![The fold](hero.gif)
 
-*the fold: backdrop pixels dissolve one by one into true transparency — no slides, no black box*
+*the fold: backdrop pixels dissolve one by one — no slides, no black box*
 
 ![Backdrops](backdrops.gif)
 
@@ -36,45 +40,46 @@ Minecraft block textures extracted live from your game's client jar — the actu
 <details>
 <summary>more info</summary>
 
-## run
+## play
 
-    git clone https://github.com/Jasonilization/blocky.git
-    cd blocky
-    ./Scripts/setup.sh        # brew + java + Rosetta + Blocky.app
-    open Blocky.app
+Pick a username and a version. Missing versions are fetched from Mojang (client, libraries, assets, sha1-checked). Fabric and NeoForge profiles launch through `inheritsFrom`.
 
-or build directly: `./Scripts/bundle.sh release` (Command Line Tools are enough — no Xcode needed). `./Scripts/dmg.sh` builds the drag-to-Applications installer.
+Sessions are offline on purpose: no account, no telemetry, the standard offline UUID, byte-exact with Java's `nameUUIDFromBytes`.
 
-## recommended servers
+## servers
 
-Every session Blocky launches is offline by design, so these are the servers built to accept it: the biggest public networks plus the cracked/offline-friendly homes. The launcher pings each one with real Minecraft Server List Ping packets — version label, live player counts, latency, MOTD — so you can see what's connectable before pasting an address into the game. Tap a chip or row to copy it, then Direct Connect.
+These are the ones that accept an offline username. Blocky pings each with a real Server List Ping, so the tile shows players, latency, and the MOTD. Tap one, or type an address under **see all**.
+
+On 1.20+, snapshots from 23w13a, and 26.x, Minecraft joins that server as the title screen appears (`--quickPlayMultiplayer`). Older versions open at the menu with the server saved at the top of the multiplayer list.
 
 | Server | Address | What it is |
 | --- | --- | --- |
-| Hypixel | `mc.hypixel.net` | The largest network in the game |
-| MineBerry | `mc.mineberry.org` | Skyblock, Survival, Towny — plays offline |
+| MineBerry | `mc.mineberry.org` | Skyblock, Survival, Towny |
 | Herobrine.org | `herobrine.org` | The classic cracked server |
-| BlocksMC | `blocksmc.com` | SkyBlock & EggWars, offline usernames |
-| CubeCraft | `play.cubecraft.net` | Java + Bedrock cross-play games |
-| ManaCube | `play.manacube.com` | SkyBlock, Prison, Parkour |
-| PvP Legacy | `play.pvplegacy.net` | Factions & competitive SkyBlock |
-| OPBlocks | `mc.opblocks.com` | OP survival and skyblock, offline friendly |
+| BlocksMC | `blocksmc.com` | SkyBlock and EggWars |
+| PvP Legacy | `play.pvplegacy.net` | Factions and SkyBlock |
+| OPBlocks | `mc.opblocks.com` | OP survival and skyblock |
+
+## mods
+
+Drop a `.jar` on the window. It is copied into `mods/`. Drop a shader pack `.zip` and it goes to `shaderpacks/`. Settings → Folders still opens either folder.
 
 ## what's inside
 
-- offline launch — no accounts, no telemetry; standard offline UUID (`UUID.nameUUIDFromBytes`-exact)
-- picks up every version in `~/Library/Application Support/minecraft`, fetches missing ones (client + libraries + assets, sha1-verified) straight from Mojang
-- auto Java detection (`java_home`, Homebrew openjdk, system JVMs) and the flags the game actually needs on macOS — `-XstartOnFirstThread` first among them; MoltenVK runs in low-latency IMMEDIATE present mode
-- **mods**: Fabric / NeoForge profiles launch through `inheritsFrom` merging — drop `.jar`s in `mods/`, shader packs in `shaderpacks/`; both folders open straight from Settings
-- pixel-dissolve fold-out panel: settings (heap slider, Java, backdrops, snapshots, game dir), version manager (sizes + delete), and a live log terminal with a focus mode
-- version management with on-disk footprints and two-tap confirmed deletion; dual-launch protection
-- idle cost: 0.0% CPU, ~42 MB, no timers, no polling (water backdrop ticks only while visible)
+- Java is picked for the version (`java_home`, Homebrew openjdk, or a runtime you pin). The game gets `-XstartOnFirstThread` and MoltenVK in IMMEDIATE present mode.
+- Heap slider, backdrop picker, snapshots toggle, custom game directory.
+- Version list with on-disk size and two-tap delete. A second launch is blocked while a game is already running.
+- The side panel folds out. The backdrop is the block face you picked, one continuous tile, no seam down the middle.
 
-## for developers
+## from source
 
-    ./Scripts/swift-build.sh   # SDK pinning handled for CLT-only machines
-    ./Scripts/swift-test.sh    # 25 tests / 9 suites
+    git clone https://github.com/Jasonilization/blocky.git
+    cd blocky
+    ./Scripts/setup.sh
+    open Blocky.app
 
-MIT — see [LICENSE](LICENSE). Made by [Jasonilization](https://github.com/Jasonilization).
+Command Line Tools are enough. `./Scripts/bundle.sh release` builds the app. `./Scripts/dmg.sh` rebuilds the installer. `./Scripts/swift-test.sh` runs the tests.
+
+MIT — see [LICENSE](LICENSE). Made by [Jasonilization](https://github.com/Jasonilization). Partially vibe coded.
 
 </details>

@@ -104,13 +104,10 @@ struct SetupWizardView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(
+        .blockyBox(10, scrim: 0.10, lift: 0.18)
+        .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(row.state == .todo || row.state == .fixing ? 0.05 : 0.03))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(edgeColor(for: row.state), lineWidth: 1)
-                )
+                .strokeBorder(edgeColor(for: row.state), lineWidth: 1)
         )
     }
 
@@ -165,13 +162,10 @@ struct SetupWizardView: View {
                 .padding(8)
             }
             .frame(maxHeight: 110)
-            .background(
+            .blockyBox(8, scrim: 0.34, lift: 0.18)
+            .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.black.opacity(0.55))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
-                    )
+                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
             )
             .onChange(of: manager.stream.count) { _ in
                 if let last = manager.stream.last { proxy.scrollTo(last, anchor: .bottom) }
